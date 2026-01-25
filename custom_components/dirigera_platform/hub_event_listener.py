@@ -197,7 +197,84 @@ class hub_event_listener(threading.Thread):
             
             self._hass.bus.fire(event_type="dirigera_platform_event",event_data=event_data)
             logger.debug(f"Event fired.. {event_data}")
-            
+
+    def parse_remote_press_event(self, msg):
+        """
+        Parse remotePressEvent messages from lightController remotes like STYRBAR and RODRET.
+        These remotes send direct press events without needing scene configuration.
+        """
+        global controller_trigger_last_time_map
+
+        if "data" not in msg:
+            logger.warning(f"discarding remotePressEvent: 'data' not found: {msg}")
+            return
+
+        data = msg["data"]
+        if "id" not in data or "clickPattern" not in data:
+            logger.warning(f"discarding remotePressEvent: 'id' or 'clickPattern' not found: {data}")
+            return
+
+        device_id = data["id"]
+        click_pattern = data["clickPattern"]
+
+        # Convert clickPattern to trigger_type
+        if click_pattern == "singlePress":
+            trigger_type = "single_click"
+        elif click_pattern == "longPress":
+            trigger_type = "long_press"
+        elif click_pattern == "doublePress":
+            trigger_type = "double_click"
+        else:
+            logger.debug(f"remotePressEvent: unknown clickPattern '{click_pattern}', ignoring...")
+            return
+
+        # Handle multi-button controllers (device_id like xxx_2 means button 2)
+        device_id_for_registry = device_id
+        button_idx = 0
+        pattern = '(([0-9]|[a-z]|-)*)_([0-9])+'
+        match = re.search(pattern, device_id)
+        if match is not None:
+            device_id_for_registry = f"{match.groups()[0]}_1"
+            button_idx = int(match.groups()[2])
+            logger.debug(f"remotePressEvent: Multi button controller, device_id effective: {device_id_for_registry} with button: {button_idx}")
+
+        if button_idx != 0:
+            trigger_type = f"button{button_idx}_{trigger_type}"
+
+        # Look up entity in registry
+        registry_value = hub_event_listener.get_registry_entry(device_id_for_registry)
+
+        if registry_value is None:
+            logger.debug(f"remotePressEvent: Controller {device_id_for_registry} not found in registry, ignoring...")
+            return
+
+        if registry_value.__class__.__name__ != "registry_entry":
+            logger.debug(f"remotePressEvent: id {device_id_for_registry} registry is not correct: {registry_value.__class__.__name__}...")
+            return
+
+        entity = registry_value.entity
+
+        # Debounce: prevent duplicate events within 1 second (IKEA bug workaround)
+        unique_key = f"{entity.registry_entry.device_id}_{trigger_type}"
+        now = datetime.datetime.now()
+        if unique_key in controller_trigger_last_time_map:
+            last_fired = controller_trigger_last_time_map[unique_key]
+            if (now - last_fired).total_seconds() < 1.0:
+                logger.debug(f"remotePressEvent: Debouncing duplicate event for {unique_key}")
+                return
+
+        controller_trigger_last_time_map[unique_key] = now
+
+        # Fire Home Assistant event
+        event_data = {
+            "type": trigger_type,
+            "device_id": entity.registry_entry.device_id,
+            ATTR_ENTITY_ID: entity.registry_entry.entity_id
+        }
+
+        self._hass.bus.fire(event_type="dirigera_platform_event", event_data=event_data)
+        logger.debug(f"remotePressEvent fired: {event_data}")
+
     def on_message(self, ws:Any, ws_msg:str):
         
         try:
@@ -210,7 +287,11 @@ class hub_event_listener(threading.Thread):
             if msg['type'] == "sceneUpdated":
                 logger.debug(f"Found sceneUpdated message... ")
                 return self.parse_scene_update(msg)
-            
+
+            if msg['type'] == "remotePressEvent":
+                logger.debug(f"Found remotePressEvent message... ")
+                return self.parse_remote_press_event(msg)
+
             if msg['type'] != "deviceStateChanged":
                 logger.debug(f"discarding non state message: {msg}")
                 return 

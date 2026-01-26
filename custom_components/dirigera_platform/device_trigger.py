@@ -1,5 +1,6 @@
 from __future__ import annotations
 import logging
+import re
 import voluptuous as vol
 from typing import Any
 
@@ -51,16 +52,26 @@ async def async_get_triggers(hass: HomeAssistant, device_id: str) -> list[dict[s
             continue
         
         logger.debug(f"Found controller to tag events to entity : {entity_name}")
-        
+
         # Now we have an ikea_controller
-        use_prefx : bool  = False
-        if registry_entity.number_of_buttons > 1:
+        # Check if entity_id has _X suffix (like "xxx_1") - this pattern must match hub_event_listener.py
+        # If it matches, we ALWAYS use buttonX_ prefix to be consistent with event firing
+        pattern = r'(([0-9]|[a-z]|-)*)_([0-9])+'
+        match = re.match(pattern, entity_id)
+
+        use_prefix : bool = False
+        if match:
+            # Device ID has _X suffix - hub_event_listener will add buttonX_ prefix
+            logger.debug(f"Entity ID {entity_id} matches multi-button pattern, will use prefix")
+            use_prefix = True
+        elif registry_entity.number_of_buttons > 1:
+            # Multiple buttons without _X suffix - also use prefix
             logger.debug("More than one button will use prefix")
-            use_prefx =True 
-        
+            use_prefix = True
+
         for btn_idx in range(registry_entity.number_of_buttons):
             for trigger_type in TRIGGER_TYPES:
-                if use_prefx:
+                if use_prefix:
                     trigger_name = f"button{btn_idx+1}_{trigger_type}"
                 else:
                     trigger_name = trigger_type

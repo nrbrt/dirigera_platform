@@ -4,6 +4,8 @@ This is an actively maintained fork of [sanjoyg/dirigera_platform](https://githu
 
 This fork addresses most of the outstanding issues from the upstream repository. Contributions are welcome — feel free to open [issues](https://github.com/nrbrt/dirigera_platform/issues) or submit pull requests.
 
+Should the upstream repository become active again, I reccommend reverting back. In the meantime, I will try to answer questions and update things on both my fork and the upstream repository, while filing PRs upstream of all changes I make, just in case the upstream maintainer resurfaces and wants to continue working on it.
+
 ### Supported Devices
 * Lights (including RGBWW with dynamic color mode switching)
 * Outlets (with energy monitoring)

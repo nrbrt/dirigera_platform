@@ -1,30 +1,61 @@
 ## IKEA Dirigera Hub Integration
-This custom components help integrating HomeAssistant with the new IKEA Dirigera hub. This integration is a scaffolding on the great work done by Nicolas Hilberg  at https://github.com/Leggin/dirigera and this is a fork of the great, but apparently abandoned, sanjoyg/dirigera_platform repository.
 
-Supports
-* Lights
-* Outlets
-* Open/Close Sensors
-* Motion Sensor
-* Environment Sensor
-* FYRTUR Blinds               
-* STYRBAR Remotes      
-* AirPurifier
-* STARKVIND AirPurifier
-* VALLHORN Motion Sensors
+This is an actively maintained fork of [sanjoyg/dirigera_platform](https://github.com/sanjoyg/dirigera_platform), which appears to be abandoned (last activity March 2025). This integration connects Home Assistant with the IKEA Dirigera hub, built on the [dirigera](https://github.com/Leggin/dirigera) Python library by Nicolas Hilberg.
+
+### Supported Devices
+* Lights (including RGBWW with dynamic color mode switching)
+* Outlets (with energy monitoring)
+* Open/Close Sensors (PARASOLL, MYGGBETT)
+* Motion Sensors (VALLHORN, MYGGSPRAY)
+* Environment Sensors (VINDSTYRKA, ALPSTUGA including CO2)
+* FYRTUR/KADRILJ Blinds
+* STYRBAR / RODRET / SOMRIG Remotes - with automation events
+* AirPurifier / STARKVIND
+* Water Leak Sensors (BADRING)
 * Scenes
-* BADRING Water Leak sensor:
-* SOMRIG Controllers - Included Events for Automation
+
+### What this fork adds
+
+**Dynamic Device Discovery** ([#139](https://github.com/sanjoyg/dirigera_platform/issues/139))
+- Devices added to or removed from the Dirigera hub are automatically reflected in Home Assistant — no restart required
+- Name and room changes made in the IKEA Home app sync to HA in real-time
+
+**MYGGSPRAY Motion Sensors** (E2494)
+- IKEA reports these as `occupancySensor` instead of `motionSensor` — this fork handles both types
+- Full WebSocket event support for real-time motion detection
+
+**Light Color Mode Switching**
+- Fixes color state not updating when changed via the IKEA Home app
+- RGBWW lamps now correctly switch between HS color and color temperature modes
+- Adds `colorHue` and `colorSaturation` to WebSocket event processing
+
+**RODRET / STYRBAR Remote Support**
+- Adds `remotePressEvent` handling for `lightController` devices
+- STYRBAR (E2002) mapped with all 4 buttons
+- Fixes device trigger prefix mismatch that broke automations
+
+**Additional Fixes**
+- Device reachability: devices now correctly show as unavailable when offline ([#147](https://github.com/sanjoyg/dirigera_platform/issues/147))
+- Color temperature: fixes mired/Kelvin unit conversion
+- ALPSTUGA: adds CO2 sensor support
+- Environment sensors: adds `state_class: measurement` for Long Term Statistics
+- STARKVIND: fixes native unit of measurement
+- Outlet power sensor: marked as measurement for energy dashboard
+- Deprecation warning fixed for HA 2024.12+ (`OptionsFlowWithConfigEntry`)
 
 
 ## Pre-requisite
 1. Identify the IP of the gateway - Usually looking at the client list in your home router interface will give that.
 
 ## Installing
-[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=sanjoyg&repository=dirigera_platform&category=integration)
 
-- Like all add-on installation goto the "HACS" option in the left menu bar in home assistant
-- Select Integration and add custom repository and enter this repositoy
+### From this fork (recommended)
+- In Home Assistant, go to **HACS** → **Integrations** → **⋮** (top right) → **Custom repositories**
+- Add `https://github.com/nrbrt/dirigera_platform` as an **Integration**
+- Search for "Dirigera" and install
+
+### From upstream (may be outdated)
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=sanjoyg&repository=dirigera_platform&category=integration)
 
 ## Using the integration
 1. One you get to add integration and get to the configuration screen, the IP of the gateway will be requested. 

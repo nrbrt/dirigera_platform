@@ -1,5 +1,5 @@
 ## IKEA Dirigera Hub Integration
-This custom components help integrating HomeAssistant with the new IKEA Dirigera hub. This integration is a scaffolding on the great work done by Nicolas Hilberg  at https://github.com/Leggin/dirigera
+This custom components help integrating HomeAssistant with the new IKEA Dirigera hub. This integration is a scaffolding on the great work done by Nicolas Hilberg  at https://github.com/Leggin/dirigera and this is a fork of the great, but apparently abandoned, sanjoyg/dirigera_platform repository.
 
 Supports
 * Lights
@@ -16,9 +16,6 @@ Supports
 * BADRING Water Leak sensor:
 * SOMRIG Controllers - Included Events for Automation
 
-<a href="https://www.buymeacoffee.com/sanjoyg" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" style="height: 60px !important;width: 217px !important;" ></a>
-
-Donation to above will got to [Samriddhi Foundation](https://www.samriddhifoundation.net/) an iniative by my teenage daughter to help the less fortunate.
 
 ## Pre-requisite
 1. Identify the IP of the gateway - Usually looking at the client list in your home router interface will give that.

@@ -58,8 +58,8 @@ Should the upstream repository become active again, I reccommend reverting back.
 - Add `https://github.com/nrbrt/dirigera_platform` as an **Integration**
 - Search for "Dirigera" and install
 
-### From upstream (may be outdated)
-[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=sanjoyg&repository=dirigera_platform&category=integration)
+### One-click install via HACS
+[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=nrbrt&repository=dirigera_platform&category=integration)
 
 ## Using the integration
 1. One you get to add integration and get to the configuration screen, the IP of the gateway will be requested. 

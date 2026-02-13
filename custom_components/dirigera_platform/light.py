@@ -193,7 +193,7 @@ class ikea_bulb(LightEntity):
     def device_info(self) -> DeviceInfo:
 
         return DeviceInfo(
-            identifiers={("dirigera_platform", self._json_data.id)},
+            identifiers={("dirigera_platform", self._json_data.relation_id or self._json_data.id)},
             name=self.name,
             manufacturer=self._json_data.attributes.manufacturer,
             model=self._json_data.attributes.model,

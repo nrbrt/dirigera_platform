@@ -1,6 +1,6 @@
 ## IKEA Dirigera Hub Integration
 
-This is a fork of [sanjoyg/dirigera_platform](https://github.com/sanjoyg/dirigera_platform), which was stagnant for a while, but the upstream maintainer resumed working on it, so I recommend to switch back to the upstream repository by SanjoyG. I will keep this respository up and may or may not continue working on it separately from the upstream repo. 
+This is a fork of [sanjoyg/dirigera_platform](https://github.com/sanjoyg/dirigera_platform), which was stagnant for a while, but the upstream maintainer resumed working on it, so I recommend to switch back to the upstream repository by SanjoyG. I will keep this respository up and may or may not continue working on it separately from the upstream repo and will post PR requests upstream when I add or improve things. 
 
 This integration connects Home Assistant with the IKEA Dirigera hub, built on the [dirigera](https://github.com/Leggin/dirigera) Python library by Nicolas Hilberg.
 

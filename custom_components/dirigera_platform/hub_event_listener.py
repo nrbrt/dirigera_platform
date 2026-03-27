@@ -32,6 +32,13 @@ process_events_from = {
                                 "timeOfLastEnergyReset",
                                 "totalEnergyConsumedLastUpdated",
                                 "customName"],
+    "electricalSensor":     [   "currentAmps",
+                                "currentActivePower",
+                                "currentVoltage",
+                                "totalEnergyConsumed",
+                                "energyConsumedAtLastReset",
+                                "timeOfLastEnergyReset",
+                                "totalEnergyConsumedLastUpdated"],
     "light"           :     ["isOn", "lightLevel", "colorTemperature", "colorHue", "colorSaturation", "customName"],
     "openCloseSensor" :     ["isOpen","batteryPercentage","customName"],
     "waterSensor"     :     ["waterLeakDetected","batteryPercentage","customName"],
@@ -490,21 +497,32 @@ class hub_event_listener(threading.Thread):
                 return
 
             if id not in hub_event_listener.device_registry:
-                # Unknown device - try to discover it
-                if self._discovery_coordinator is not None:
-                    logger.info(f"Unknown device detected: {id} (type: {device_type}), triggering discovery")
-                    # Schedule discovery on the main event loop
-                    self._hass.loop.call_soon_threadsafe(
-                        lambda: self._hass.async_create_task(
-                            self._discovery_coordinator.discover_device(id, device_type)
-                        )
-                    )
+                # For electricalSensor events (split-device plugs like GRILLPLATS/TOFSMYGGA):
+                # The sensor device ID ends with _2, but the outlet is registered as _1.
+                # Route energy events to the parent outlet entity.
+                if device_type == "electricalSensor" and id.endswith("_2"):
+                    outlet_id = id[:-2] + "_1"
+                    if outlet_id in hub_event_listener.device_registry:
+                        logger.debug(f"Routing electricalSensor {id} events to outlet {outlet_id}")
+                        id = outlet_id
+                    else:
+                        logger.debug(f"electricalSensor {id}: no matching outlet {outlet_id} found")
+                        return
                 else:
-                    logger.info(f"discarding message as device for id: {id} not found for msg: {msg}")
-                return
+                    # Unknown device - try to discover it
+                    if self._discovery_coordinator is not None:
+                        logger.info(f"Unknown device detected: {id} (type: {device_type}), triggering discovery")
+                        self._hass.loop.call_soon_threadsafe(
+                            lambda: self._hass.async_create_task(
+                                self._discovery_coordinator.discover_device(id, device_type)
+                            )
+                        )
+                    else:
+                        logger.info(f"discarding message as device for id: {id} not found for msg: {msg}")
+                    return
 
             registry_value = hub_event_listener.get_registry_entry(id)
-            entity = registry_value.entity 
+            entity = registry_value.entity
 
             reachability_changed = False
             if "isReachable" in info:

@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional
 from dirigera import Hub
 
 from dirigera.devices.device import Attributes, Device
+from dirigera.devices.outlet import Outlet, OutletAttributes, dict_to_outlet
 from dirigera.hub.abstract_smart_home_hub import AbstractSmartHomeHub
 from dirigera.devices.scene import Info, Icon,  SceneType, Trigger, TriggerDetails, ControllerType
 import logging
@@ -79,6 +80,79 @@ class HubX(Hub):
             if scene.name.startswith("dirigera_integration_empty_scene_"):
                 logging.debug(f"Deleting Scene id: {scene.id} name: {scene.name}...")
                 self.delete_scene(scene.id)
+
+    def get_outlets(self) -> list:
+        """
+        Fetches all outlets registered in the Hub.
+        For split-device plugs (GRILLPLATS, TOFSMYGGA), merges energy attributes
+        from the linked electricalSensor device into the outlet.
+        """
+        devices = self.get("/devices")
+        outlets = list(filter(lambda x: x["type"] == "outlet", devices))
+        electrical_sensors = list(filter(
+            lambda x: x.get("deviceType") == "electricalSensor", devices
+        ))
+
+        # Build lookup: relationId -> electricalSensor attributes
+        energy_by_relation = {}
+        for sensor in electrical_sensors:
+            rel_id = sensor.get("relationId")
+            if rel_id:
+                energy_by_relation[rel_id] = sensor.get("attributes", {})
+                # Also store the sensor device ID for event listener mapping
+                energy_by_relation[rel_id]["_sensor_device_id"] = sensor.get("id")
+
+        # Merge energy attributes into outlets that have a matching relationId
+        energy_attrs = [
+            ("currentActivePower", "current_active_power"),
+            ("currentAmps", "current_amps"),
+            ("currentVoltage", "current_voltage"),
+            ("totalEnergyConsumed", "total_energy_consumed"),
+            ("totalEnergyConsumedLastUpdated", "total_energy_consumed_last_updated"),
+            ("energyConsumedAtLastReset", "energy_consumed_at_last_reset"),
+            ("timeOfLastEnergyReset", "time_of_last_energy_reset"),
+        ]
+
+        for outlet in outlets:
+            rel_id = outlet.get("relationId")
+            if rel_id and rel_id in energy_by_relation:
+                sensor_attrs = energy_by_relation[rel_id]
+                for api_key, snake_key in energy_attrs:
+                    if api_key in sensor_attrs and sensor_attrs[api_key] is not None:
+                        outlet.setdefault("attributes", {})[api_key] = sensor_attrs[api_key]
+                logger.debug(
+                    f"Merged energy attributes from electricalSensor into outlet "
+                    f"'{outlet.get('attributes', {}).get('customName', '?')}' "
+                    f"(relationId: {rel_id})"
+                )
+
+        return [dict_to_outlet(outlet, self) for outlet in outlets]
+
+    def get_outlet_by_id(self, id_: str) -> Outlet:
+        """
+        Fetches an outlet by ID, merging energy data from linked electricalSensor.
+        """
+        # Fetch all to enable relationId matching
+        outlets = self.get_outlets()
+        for outlet in outlets:
+            if outlet.id == id_:
+                return outlet
+        raise ValueError(f"No outlet found with id {id_}")
+
+    def get_electrical_sensor_map(self) -> dict:
+        """
+        Returns a mapping of electricalSensor device IDs to their parent outlet device IDs.
+        Used by the event listener to route energy update events to the correct outlet entity.
+        """
+        devices = self.get("/devices")
+        outlets = {d.get("relationId"): d.get("id") for d in devices if d["type"] == "outlet" and d.get("relationId")}
+        sensor_to_outlet = {}
+        for d in devices:
+            if d.get("deviceType") == "electricalSensor":
+                rel_id = d.get("relationId")
+                if rel_id and rel_id in outlets:
+                    sensor_to_outlet[d["id"]] = outlets[rel_id]
+        return sensor_to_outlet
 
     def get_motion_sensors(self) -> List[MotionSensorX]:
         """

@@ -689,9 +689,14 @@ class hub_event_listener(threading.Thread):
             self._wsapp = websocket.WebSocketApp(
                 self._hub.websocket_base_url,
                 header={"Authorization": f"Bearer {self._hub.token}"},
-                on_message=self.on_message)
-            self._wsapp.run_forever(sslopt={"cert_reqs": ssl.CERT_NONE})
-            #self._hub.create_event_listener(on_message=self.on_message, on_error=self.on_error)
+                on_message=self.on_message,
+                on_error=self.on_error)
+            # ping_interval sends WebSocket ping frames to keep the connection alive.
+            # Without this, the Dirigera hub disconnects after ~5 minutes of inactivity.
+            self._wsapp.run_forever(
+                sslopt={"cert_reqs": ssl.CERT_NONE},
+                ping_interval=30,
+                ping_timeout=10)
         except Exception as ex:
             logger.error("Error creating event listener...")
             logger.error(ex)

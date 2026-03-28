@@ -514,11 +514,12 @@ class ikea_alpstuga_co2(ikea_base_device_sensor, SensorEntity):
     def __init__(self, device: ikea_vindstyrka_device) -> None:
         logger.debug("ikea_alpstuga_co2 ctor...")
         super().__init__(
-            device, 
-            id_suffix="CO2", 
+            device,
+            id_suffix="CO2",
             name="CO2",
             device_class=SensorDeviceClass.CO2,
-            native_unit_of_measurement=CONCENTRATION_PARTS_PER_MILLION)
+            native_unit_of_measurement=CONCENTRATION_PARTS_PER_MILLION,
+            state_class="measurement")
 
     @property
     def native_value(self) -> int:
@@ -535,6 +536,7 @@ CONTROLLER_BUTTON_MAP = {
     "Remote Control N2" : 4,  # STYRBAR 4-button remote
     "TRADFRI on/off switch" : 2,  # Hub currently reports both as _1, but has 2 physical buttons
     "RODRET Dimmer" : 2,
+    "RODRET wireless dimmer" : 2,
 }
 
 class ikea_controller_device(ikea_base_device, SensorEntity):

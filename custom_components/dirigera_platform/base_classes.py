@@ -557,6 +557,7 @@ CONTROLLER_BUTTON_MAP = {
     "TRADFRI on/off switch" : 2,  # Hub currently reports both as _1, but has 2 physical buttons
     "RODRET Dimmer" : 2,
     "RODRET wireless dimmer" : 2,
+    "BILRESA dual button" : 2,
 }
 
 class ikea_controller_device(ikea_base_device, SensorEntity):

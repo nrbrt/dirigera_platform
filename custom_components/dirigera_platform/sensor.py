@@ -182,22 +182,26 @@ async def add_air_purifier_sensors(async_add_entities, air_purifiers):
 
 async def add_controllers_sensors(hass, async_add_entities, hub, controllers):
     logger.debug("Starting to add controller sensors...")
-    # Controllers with more one button are returned as spearate controllers
+    # Controllers with more than one button are returned as separate controllers
     # their uniqueid has _1, _2 suffixes. Only the primary controller has
     # battery % attribute which we shall use to identify
     controller_entities = []
     for controller in controllers:
-        # Hack to create empty scene so that we can associate it the controller
-        # so that click of buttons on the controller can generate events on the hub
+        # Create empty scenes so that button clicks generate events on the hub.
+        # Some controllers (e.g., BILRESA dual button) have empty can_send
+        # but still send remotePressEvent when linked to a device in IKEA app.
         clicks_supported = controller._json_data.capabilities.can_send
         clicks_supported = [ x for x in clicks_supported if x.endswith("Press") ]
 
         if len(clicks_supported) == 0:
-            logger.debug(f"Ignoring controller for scene creation : {controller._json_data.id} as no press event supported : {controller._json_data.capabilities.can_send}")
+            logger.debug(f"Controller {controller._json_data.id} has no press capabilities in can_send: {controller._json_data.capabilities.can_send} - will still register for remotePressEvent")
         else:
             logger.debug(f"Will be creating empty scene for {controller._json_data.id}")
             await hass.async_add_executor_job(hub.create_empty_scene,controller._json_data.id, clicks_supported)
 
+        # Register ALL controllers that have battery_percentage as entities,
+        # regardless of can_send capabilities. This ensures they're in the
+        # device registry and can receive remotePressEvent button events.
         if getattr(controller._json_data.attributes,"battery_percentage",None) is not None:
             controller_entities.append(controller)
 

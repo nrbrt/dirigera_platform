@@ -222,8 +222,9 @@ async def async_setup_entry(
     if hass_data[CONF_IP_ADDRESS] != "mock":
         hub_events = hub_event_listener(hub_basic, hass, discovery)
         hub_events.start()
-        # Sync device areas from Dirigera rooms to HA device registry
-        # This ensures areas are set correctly after HA restart
+        # Sync device names and areas from Dirigera to HA device registry
+        # This ensures names and areas are set correctly after HA restart
+        await hub_events.sync_all_device_names()
         await hub_events.sync_all_device_areas()
 
     logger.debug("Complete async_setup_entry...")

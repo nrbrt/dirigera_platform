@@ -137,8 +137,15 @@ class hub_event_listener(threading.Thread):
         except Exception as ex:
             logger.error(f"Failed to update device area for {device_id}: {ex}")
 
-    async def _update_device_name(self, device_id: str, new_name: str):
-        """Update the device's name in Home Assistant's device registry."""
+    async def _update_device_name(self, device_id: str, new_name: str, force: bool = False):
+        """Update the device's name in Home Assistant's device registry.
+
+        Args:
+            device_id: The device identifier
+            new_name: The new name from Dirigera hub
+            force: If True, update even if user has set a custom name in HA.
+                   Used at startup to sync names changed in the IKEA app.
+        """
         try:
             device_reg = dr.async_get(self._hass)
 
@@ -148,16 +155,48 @@ class hub_event_listener(threading.Thread):
                 logger.debug(f"Device {device_id} not found in HA device registry for name update")
                 return
 
-            # Only update if user hasn't set a custom name
-            if device_entry.name_by_user is not None:
+            # Skip if user has set a custom name in HA (unless force=True)
+            if not force and device_entry.name_by_user is not None:
                 logger.debug(f"Device {device_id} has user-set name, skipping automatic name update")
+                return
+
+            # Only update if the name actually changed
+            current_name = device_entry.name_by_user or device_entry.name
+            if current_name == new_name:
                 return
 
             # Update the device's name
             logger.info(f"Updating device {device_id} name to {new_name}")
-            device_reg.async_update_device(device_entry.id, name=new_name)
+            if device_entry.name_by_user is not None:
+                # Clear user-set name and update integration name
+                device_reg.async_update_device(device_entry.id, name=new_name, name_by_user=None)
+            else:
+                device_reg.async_update_device(device_entry.id, name=new_name)
         except Exception as ex:
             logger.error(f"Failed to update device name for {device_id}: {ex}")
+
+    async def sync_all_device_names(self):
+        """Sync all device names from Dirigera customName to HA device registry.
+
+        This should be called at startup after all entities are registered,
+        to ensure HA device names match Dirigera names (set via IKEA app).
+        """
+        logger.info("Starting device name sync from Dirigera")
+        synced_count = 0
+        for device_id, registry_entry in hub_event_listener.device_registry.items():
+            try:
+                entity = registry_entry.entity
+                if not hasattr(entity, '_json_data'):
+                    continue
+                custom_name = entity._json_data.attributes.custom_name
+                if not custom_name:
+                    continue
+                identifier = entity._json_data.relation_id or entity._json_data.id
+                await self._update_device_name(identifier, custom_name, force=True)
+                synced_count += 1
+            except Exception as ex:
+                logger.error(f"Failed to sync name for device {device_id}: {ex}")
+        logger.info(f"Device name sync complete, processed {synced_count} devices")
 
     async def sync_all_device_areas(self):
         """Sync all device areas from Dirigera room info to HA device registry.

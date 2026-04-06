@@ -1,133 +1,78 @@
-## IKEA Dirigera Hub Integration
+# IKEA Dirigera Hub Integration for Home Assistant
 
-This is an actively maintained fork of [sanjoyg/dirigera_platform](https://github.com/sanjoyg/dirigera_platform).
+[![HACS](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://github.com/hacs/integration)
+[![Version](https://img.shields.io/github/v/release/nrbrt/dirigera_platform)](https://github.com/nrbrt/dirigera_platform/releases)
+[![Downloads](https://img.shields.io/github/downloads/nrbrt/dirigera_platform/total)](https://github.com/nrbrt/dirigera_platform/releases)
 
-This integration connects Home Assistant with the IKEA Dirigera hub, built on the [dirigera](https://github.com/Leggin/dirigera) Python library by Nicolas Hilberg.
+A Home Assistant integration for the IKEA Dirigera hub, built on the [dirigera](https://github.com/Leggin/dirigera) Python library (v1.2.6). Originally forked from [sanjoyg/dirigera_platform](https://github.com/sanjoyg/dirigera_platform) and actively maintained with new features, device support, and bug fixes.
 
-Contributions are welcome — feel free to open [issues](https://github.com/nrbrt/dirigera_platform/issues) or submit pull requests. Device data dumps are especially helpful for adding support for new devices.
+Contributions are welcome — feel free to open [issues](https://github.com/nrbrt/dirigera_platform/issues) or submit pull requests. Device data dumps are especially helpful for adding support for new devices ([how to dump](docs/dump-data.md)).
 
-### Supported Devices
-* Lights (including RGBWW with dynamic color mode switching)
-* Outlets (with energy monitoring)
-  * INSPELNING — single-device, energy attributes built-in
-  * GRILLPLATS / TOFSMYGGA — split-device, outlet + energy sensor auto-merged ([#17](https://github.com/nrbrt/dirigera_platform/issues/17))
-* Open/Close Sensors (PARASOLL, MYGGBETT)
-* Motion Sensors (VALLHORN, MYGGSPRAY)
-* Light Sensors (MYGGSPRAY illuminance)
-* Environment Sensors
-  * VINDSTYRKA — air quality (temperature, humidity, PM2.5, VOC)
-  * ALPSTUGA — air quality (including CO2)
-  * TIMMERFLOTTE — temperature + humidity, split-device auto-merged ([#14](https://github.com/nrbrt/dirigera_platform/issues/14))
-* FYRTUR/KADRILJ Blinds
-* STYRBAR / RODRET / SOMRIG Remotes - with automation events
-* AirPurifier / STARKVIND
-* Water Leak Sensors (BADRING)
-* Scenes
+## Highlights
 
-### What this fork adds
+- **Dynamic Device Discovery** — devices added, removed, renamed, or moved to a different room in the IKEA Home app are automatically reflected in Home Assistant without a restart
+- **Split-Device Merging** — newer IKEA devices (GRILLPLATS, TOFSMYGGA, TIMMERFLOTTE, MYGGSPRAY) expose as multiple API devices linked by `relationId`; the integration automatically merges them into single HA entities
+- **Real-Time Updates** — full WebSocket event support for instant state changes across all device types
+- **Reliable Startup** — automatic retry on connection failure (`ConfigEntryNotReady`) instead of requiring manual reloads
 
-**Dynamic Device Discovery** ([#139](https://github.com/sanjoyg/dirigera_platform/issues/139))
-- Devices added to or removed from the Dirigera hub are automatically reflected in Home Assistant — no restart required
-- Name and room changes made in the IKEA Home app sync to HA in real-time
+## Supported Devices
 
-**MYGGSPRAY Motion Sensors** (E2494)
-- IKEA reports these as `occupancySensor` instead of `motionSensor` — this fork handles both types
-- Full WebSocket event support for real-time motion detection
-- Light sensor (illuminance) support — each MYGGSPRAY registers a separate `lightSensor` device; raw Matter values are converted to lux
+| Category | Devices | Notes |
+|----------|---------|-------|
+| **Lights** | TRÅDFRI, FLOALT, and other IKEA lights | RGBWW with dynamic color mode switching (HS ↔ color temp) |
+| **Outlets** | INSPELNING, GRILLPLATS, TOFSMYGGA | Energy monitoring (voltage, current, power, energy); split-device pairs auto-merged |
+| **Motion Sensors** | VALLHORN, MYGGSPRAY (E2494) | Handles both `motionSensor` and `occupancySensor` device types |
+| **Light Sensors** | MYGGSPRAY (E2494) | Illuminance in lux (Matter raw value conversion) |
+| **Open/Close Sensors** | PARASOLL, MYGGBETT | |
+| **Environment Sensors** | VINDSTYRKA (PM2.5, VOC), ALPSTUGA (CO2), TIMMERFLOTTE | Split-device pairs auto-merged; `state_class: measurement` for Long Term Statistics |
+| **Blinds** | FYRTUR, KADRILJ | |
+| **Remotes** | STYRBAR, RODRET, SOMRIG, BILRESA | `remotePressEvent` + `shortcutController` support; automation triggers for all buttons |
+| **Air Purifiers** | STARKVIND | Native unit of measurement fix |
+| **Water Sensors** | BADRING | |
+| **Scenes** | All Dirigera scenes | Exposed as entities with Activate button |
 
-**Light Color Mode Switching**
-- Fixes color state not updating when changed via the IKEA Home app
-- RGBWW lamps now correctly switch between HS color and color temperature modes
-- Adds `colorHue` and `colorSaturation` to WebSocket event processing
+## Requirements
 
-**RODRET / STYRBAR Remote Support**
-- Adds `remotePressEvent` handling for `lightController` devices
-- STYRBAR (E2002) mapped with all 4 buttons
-- Fixes device trigger prefix mismatch that broke automations
+- Home Assistant 2024.12 or newer
+- IKEA Dirigera hub on your local network
+- HACS installed
 
-**Library Upgrade**
-- Upgraded dirigera library from 1.2.1 to 1.2.6
-- Uses native library classes for `EnvironmentSensor` (CO2 support) and `LightSensor` (illuminance) instead of custom patches
-- Custom patches remain only where needed: `MotionSensorX` (combined motionSensor/occupancySensor), `ControllerX`, `HackScene`
+## Installation
 
-**Split-Device Support** (v0.2.0)
-- IKEA's newer Matter-based devices (GRILLPLATS, TOFSMYGGA, TIMMERFLOTTE) expose as multiple devices in the Dirigera API, linked by `relationId`
-- The integration automatically detects and merges split-device pairs into single entities
-- GRILLPLATS/TOFSMYGGA: outlet (on/off) + electricalSensor (voltage, current, power, energy) → single outlet with energy monitoring
-- TIMMERFLOTTE: two environmentSensors (temperature + humidity) → single sensor with both measurements
-- WebSocket events from split-device siblings are routed to the merged entity for real-time updates
-- Periodic sensor updates preserve merged attributes (prevents "unknown" state after reload)
+### Via HACS (recommended)
 
-**Additional Fixes**
-- Device reachability: devices now correctly show as unavailable when offline ([#147](https://github.com/sanjoyg/dirigera_platform/issues/147))
-- Color temperature: fixes mired/Kelvin unit conversion
-- ALPSTUGA: adds CO2 sensor support
-- Environment sensors: adds `state_class: measurement` for Long Term Statistics
-- STARKVIND: fixes native unit of measurement
-- Outlet power sensor: marked as measurement for energy dashboard
-- Deprecation warning fixed for HA 2024.12+ (`OptionsFlowWithConfigEntry`)
-
-
-## Pre-requisite
-1. Identify the IP of the gateway - Usually looking at the client list in your home router interface will give that.
-
-## Installing
-
-### From this fork (recommended)
-- In Home Assistant, go to **HACS** → **Integrations** → **⋮** (top right) → **Custom repositories**
-- Add `https://github.com/nrbrt/dirigera_platform` as an **Integration**
-- Search for "Dirigera" and install
-
-### One-click install via HACS
 [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=nrbrt&repository=dirigera_platform&category=integration)
 
-## Using the integration
-1. One you get to add integration and get to the configuration screen, the IP of the gateway will be requested. 
-   **IMPORTANT**
-   Before hitting enter be near the IKEA Dirigera hub as post entering IP a request to press the action button on the hub
+Or manually:
+1. In Home Assistant, go to **HACS** → **Integrations** → **⋮** (top right) → **Custom repositories**
+2. Add `https://github.com/nrbrt/dirigera_platform` as an **Integration**
+3. Search for "Dirigera" and install
 
-2. Once you get the screen requesting to press the action button, physically press the button once and then click on submit
+## Setup
 
-3. If the IP is right and action button has been pressed, then the integration will be added and all devices registered will be shown. At this time the following device types are supported
-    
-   In addition you'll find the scenes added as individual entities. Go to the "Entities" to find them as they're not part of any device. Use the "Activate" button to trigger a scene.
+1. Go to **Settings** → **Devices & Services** → **Add Integration** → search for **Dirigera**
+2. Enter the IP address of your Dirigera hub (find it in your router's DHCP client list)
+3. When prompted, press the **action button** on the Dirigera hub, then click Submit
+4. Your devices will appear automatically
 
-## Testing installation with mock
-1. If you enter the IP as "mock" then mock bulbs and outlet will be added.
-2. Once you verify that the bulbs and outlets are added feel free to delete the integration
+To test with mock devices, enter `mock` as the IP address.
 
-Here is how it looks
+## Bug Reports & Feature Requests
 
-1. After you have downloaded the integration from HACS and go to Setting -> Integration -> ADD INTEGRATION to add the dirigera integration, the following screen will come up
+When opening an issue, please include a device data dump — it helps enormously:
 
-![](screenshots/config-ip-details.png)
+1. Go to **Developer Tools** → **Services**
+2. Call `dirigera_platform.dump_data` (no parameters needed)
+3. Copy the output from the Home Assistant log
 
-To test the integration, enter the IP as "mock". The check-box indicates if the bulbs/lights associated with a device-set should be visible as entities or not
+See [detailed instructions](docs/dump-data.md).
 
-![](screenshots/config-mock.png)
+## Changelog
 
-The integration would prompt to press the action button on the hub
+See [Releases](https://github.com/nrbrt/dirigera_platform/releases) for a full changelog.
 
-![](screenshots/config-press-action.png)
+### Recent
 
-Since this is mock, we would get a success message
-
-![](screenshots/config-hub-setup-complete-mock.png)
-
-Once this is complete you would see two bulbs and two outlets appearing.
-
-![](screenshots/mock-lights.png)
-![](screenshots/mock-outlets.png)
-
-## Raising Issue
-
-Now I dont have access to all sensors, hence what will be useful is when you raise an issue also supply to the JSON that the hub returns.
-To get the JSON do the following
-
-* Go to Developer -> Service and invoke dirigera_platform.dump_data without any parameters
-* Look at the HASS log which would have the JSON. 
-* If you see any platform errors include that as well
-
-[Detailed Instructions](docs/dump-data.md)
-
-
+- **v0.2.6** (2026-04-04) — BILRESA dual button support; consistent device naming for split-devices
+- **v0.2.5** (2026-04-04) — Split-device plug support (GRILLPLATS, TOFSMYGGA)
+- **v0.2.0** (2026-03-27) — Split-device merging framework; TIMMERFLOTTE support

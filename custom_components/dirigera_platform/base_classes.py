@@ -174,6 +174,8 @@ class ikea_base_device:
             listener.schedule_update_ha_state(force_refresh)
 
 class ikea_base_device_sensor():
+    _attr_has_entity_name = True
+
     def __init__(self,  device, id_suffix:str = "", name:str = "", native_unit_of_measurement="", icon="", device_class=None, entity_category=None, state_class=None):
         self._device = device
         self._name = name
@@ -200,12 +202,7 @@ class ikea_base_device_sensor():
         
     @property
     def name(self):
-        if self._name is None or len(self._name) == 0:
-            return self._device.name
-        if self._device.name.lower()  == self._name.lower():
-            # Dont duplication , Bug Fix #109
-            return self._device.name
-        return f"{self._device.name} {self._name}"
+        return None if self._name is None or len(self._name) == 0 else self._name
     
     @property
     def entity_category(self):

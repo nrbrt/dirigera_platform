@@ -326,12 +326,16 @@ class hub_event_listener(threading.Thread):
                 except Exception as ex:
                     logger.warning(f"Scene action: failed to set {key} on {device_id}: {ex}")
 
-            # Update color_mode based on scene attributes
-            if updated and hasattr(entity, '_color_mode'):
-                if "colorHue" in attributes or "colorSaturation" in attributes:
+            # Update color_mode based on scene attributes.
+            # Only apply a mode the entity actually supports — Dirigera scene
+            # actions can include colorHue/colorSaturation/colorTemperature for
+            # devices that don't support those modes (e.g. Tradfri Driver).
+            if updated and hasattr(entity, '_color_mode') and hasattr(entity, '_supported_color_modes'):
+                supported = entity._supported_color_modes or []
+                if ("colorHue" in attributes or "colorSaturation" in attributes) and ColorMode.HS in supported:
                     entity._color_mode = ColorMode.HS
                     logger.debug(f"Scene action: set color_mode to HS for {device_id}")
-                elif "colorTemperature" in attributes:
+                elif "colorTemperature" in attributes and ColorMode.COLOR_TEMP in supported:
                     entity._color_mode = ColorMode.COLOR_TEMP
                     logger.debug(f"Scene action: set color_mode to COLOR_TEMP for {device_id}")
 
@@ -602,11 +606,15 @@ class hub_event_listener(threading.Thread):
                         logger.warn(f"Failed to set attribute key: {key} converted to {key_attr} on device: {id}")
                         logger.warn(ex)
                                 
-                # Update color_mode for lights when color attributes change
-                if device_type == "light" and hasattr(entity, '_color_mode'):
-                    if "colorHue" in attributes or "colorSaturation" in attributes:
+                # Update color_mode for lights when color attributes change.
+                # Guard with _supported_color_modes so we never set a mode the
+                # entity cannot report (e.g. Tradfri Driver is brightness-only
+                # but the hub may still emit colorHue/colorSaturation keys).
+                if device_type == "light" and hasattr(entity, '_color_mode') and hasattr(entity, '_supported_color_modes'):
+                    supported = entity._supported_color_modes or []
+                    if ("colorHue" in attributes or "colorSaturation" in attributes) and ColorMode.HS in supported:
                         entity._color_mode = ColorMode.HS
-                    elif "colorTemperature" in attributes:
+                    elif "colorTemperature" in attributes and ColorMode.COLOR_TEMP in supported:
                         entity._color_mode = ColorMode.COLOR_TEMP
 
                 # Lights behave odd with hubs when setting attribute one event is generated which

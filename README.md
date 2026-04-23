@@ -73,6 +73,7 @@ See [Releases](https://github.com/nrbrt/dirigera_platform/releases) for a full c
 
 ### Recent
 
+- **v0.2.15** (2026-04-23) — Fix: guard `_color_mode` writes against unsupported modes on brightness-only lights (TRÅDFRI Driver). Prevents `HomeAssistantError: "... set to unsupported color mode hs"` after scene activation. (PR #26 by @charleslemaux)
 - **v0.2.14** (2026-04-20) — Fix: proper split-device entity naming using has_entity_name (PR #25 by @crowbarz)
 - **v0.2.13** (2026-04-20) — Fix: split-device entity naming — secondary entities (e.g. MYGGSPRAY illuminance) now inherit the user-configured name from the primary entity
 - **v0.2.11/12** (2026-04-17) — Fix: application-level WebSocket keepalive to prevent Dirigera hub "disconnected due to inactivity" (issue #12)

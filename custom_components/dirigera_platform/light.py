@@ -316,7 +316,7 @@ class ikea_bulb(LightEntity):
                 await self.hass.async_add_executor_job(self._json_data.set_light_level,self.light_level)
                 self._ignore_update = True 
 
-            if ATTR_COLOR_TEMP_KELVIN in kwargs:
+            if ATTR_COLOR_TEMP_KELVIN in kwargs and ColorMode.COLOR_TEMP in self._supported_color_modes:
                 # color temp requested
                 logger.debug("Request to set color temp...")
                 ct = kwargs[ATTR_COLOR_TEMP_KELVIN]
@@ -331,7 +331,7 @@ class ikea_bulb(LightEntity):
                 self._color_mode = ColorMode.COLOR_TEMP
                 self._ignore_update = True
 
-            if ATTR_HS_COLOR in kwargs:
+            if ATTR_HS_COLOR in kwargs and ColorMode.HS in self._supported_color_modes:
                 logger.debug("Request to set color HS")
                 hs_tuple = kwargs[ATTR_HS_COLOR]
                 self._color_hue = hs_tuple[0]
@@ -485,23 +485,23 @@ class ikea_bulb_device_set(LightEntity):
                 await self.hass.async_add_executor_job(self.patch_command, {"lightLevel" : int((level / 255) * 100)})
                 self._controller._ignore_update = True 
 
-            if ATTR_COLOR_TEMP_KELVIN in kwargs:
+            if ATTR_COLOR_TEMP_KELVIN in kwargs and ColorMode.COLOR_TEMP in self._controller.supported_color_modes:
                 # color temp requested
                 # If request is white then brightness is passed
                 logger.debug("Request to device_set set color temp...")
                 ct = kwargs[ATTR_COLOR_TEMP_KELVIN]
                 logger.debug("Set CT : {}".format(ct))
                 await self.hass.async_add_executor_job(self.patch_command, {"colorTemperature" : ct})
-                self._controller._ignore_update = True 
+                self._controller._ignore_update = True
 
-            if ATTR_HS_COLOR in kwargs:
+            if ATTR_HS_COLOR in kwargs and ColorMode.HS in self._controller.supported_color_modes:
                 logger.debug("Request to set color HS device_set")
                 hs_tuple = kwargs[ATTR_HS_COLOR]
                 self._color_hue = hs_tuple[0]
                 self._color_saturation = hs_tuple[1] / 100
                 # Saturation is 0 - 1 at IKEA
-                self._controller._ignore_update = True 
-                
+                self._controller._ignore_update = True
+
                 await self.hass.async_add_executor_job(self.patch_command,{ "colorHue" : self._color_hue, "colorSaturation" : self._color_saturation})
 
         except Exception as ex:

@@ -142,6 +142,13 @@ class DeviceDiscoveryCoordinator:
             callback = self._platform_callbacks[platform]
             callback([entity])
 
+            # Sensor device types that also report battery_percentage
+            # produce a companion battery diagnostic at startup (see
+            # sensor.py:async_setup_entry). Mirror that here so devices
+            # added at runtime (e.g. a freshly paired BADRING) get the
+            # battery sensor without requiring a HA restart.
+            self._add_battery_companion(device_type, entity)
+
             # Mark as known
             self._known_device_ids.add(device_id)
             logger.info(f"Successfully discovered and added device: {device_id} ({device_data.get('attributes', {}).get('customName', 'unnamed')})")
@@ -274,6 +281,23 @@ class DeviceDiscoveryCoordinator:
             import traceback
             logger.error(traceback.format_exc())
             return None
+
+    def _add_battery_companion(self, device_type: str, primary_entity: Any) -> None:
+        """Emit a battery diagnostic alongside the primary entity for sensor
+        device types that report battery_percentage. lightSensor is excluded
+        on purpose: today's only lightSensor is MYGGSPRAY's split half, whose
+        battery is owned by the paired motionSensor."""
+        if device_type not in ("waterSensor", "motionSensor", "occupancySensor", "openCloseSensor"):
+            return
+        wrapper = getattr(primary_entity, "_device", None)
+        if wrapper is None or getattr(wrapper, "battery_percentage", None) is None:
+            return
+        sensor_cb = self._platform_callbacks.get("sensor")
+        if sensor_cb is None:
+            logger.debug("No 'sensor' callback registered, skipping battery companion")
+            return
+        from .base_classes import battery_percentage_sensor
+        sensor_cb([battery_percentage_sensor(wrapper)])
 
 
 # Global instance - will be initialized in __init__.py

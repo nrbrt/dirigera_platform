@@ -61,11 +61,21 @@ async def async_setup_entry(
     async_add_entities(light_sensor_entities)
 
     # Add battery sensors
+    # MYGGSPRAY exposes occupancySensor + lightSensor as a split-device sharing
+    # relation_id; both report battery. Emit the battery once, from the motion side.
+    motion_relation_ids = {
+        s._json_data.relation_id for s in platform.motion_sensors
+        if s._json_data.relation_id
+    }
     battery_sensors = []
     battery_sensors.extend([battery_percentage_sensor(x) for x in platform.motion_sensors])
     battery_sensors.extend([battery_percentage_sensor(x) for x in platform.open_close_sensors])
     battery_sensors.extend([battery_percentage_sensor(x) for x in platform.water_sensors])
-    battery_sensors.extend([battery_percentage_sensor(x) for x in platform.light_sensors if getattr(x,"battery_percentage",None) is not None])
+    battery_sensors.extend([
+        battery_percentage_sensor(x) for x in platform.light_sensors
+        if getattr(x, "battery_percentage", None) is not None
+        and x._json_data.relation_id not in motion_relation_ids
+    ])
     battery_sensors.extend([battery_percentage_sensor(x) for x in platform.environment_sensors if getattr(x,"battery_percentage",None) is not None])
     battery_sensors.extend([battery_percentage_sensor(x) for x in platform.blinds if getattr(x,"battery_percentage",None) is not None])
 

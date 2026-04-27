@@ -73,6 +73,10 @@ See [Releases](https://github.com/nrbrt/dirigera_platform/releases) for a full c
 
 ### Recent
 
+- **v0.2.16** (2026-04-27) — Battery sensor fixes (PRs #27, #28, #29 by @ermitovski):
+  - Fix: avoid duplicate `Battery Percentage` entity on MYGGSPRAY split-devices. The hub exposes MYGGSPRAY as `occupancySensor` + `lightSensor` sharing a `relation_id`, both reporting `battery_percentage`; the duplicate `*_battery_percentage_2` entity is now suppressed by binding the battery diagnostic to the motion side only. Pre-existing `_2` entities become orphaned (state `unavailable`) and can be deleted from the device page.
+  - Fix: de-duplicate the controller battery diagnostic on multi-button controllers (BILRESA, SOMRIG, RODRET, STYRBAR, ...). Group controllers by `relation_id` and elect a single primary that becomes the HA entity; secondary halves rebind to the primary in the device registry so `remotePressEvents` still resolve to a registered entity. Multi-button device-trigger generation is preserved.
+  - Feature: emit `battery_percentage` diagnostic when a sensor (`waterSensor`, `motionSensor`, `occupancySensor`, `openCloseSensor`) is paired with HA already running. The WebSocket-driven discovery path now mirrors the static startup path, so freshly paired BADRING / motion / open-close sensors show the battery diagnostic without a HA restart.
 - **v0.2.15** (2026-04-23) — Fix: guard `_color_mode` writes against unsupported modes on brightness-only lights (TRÅDFRI Driver). Prevents `HomeAssistantError: "... set to unsupported color mode hs"` after scene activation. (PR #26 by @charleslemaux)
 - **v0.2.14** (2026-04-20) — Fix: proper split-device entity naming using has_entity_name (PR #25 by @crowbarz)
 - **v0.2.13** (2026-04-20) — Fix: split-device entity naming — secondary entities (e.g. MYGGSPRAY illuminance) now inherit the user-configured name from the primary entity

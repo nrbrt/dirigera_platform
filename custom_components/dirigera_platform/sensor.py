@@ -30,6 +30,7 @@ from homeassistant.core import HomeAssistantError
 from homeassistant.helpers.entity import EntityCategory
 
 from .const import DOMAIN, PLATFORM, DISCOVERY_COORDINATOR
+from .hub_event_listener import hub_event_listener, registry_entry
 
 logger = logging.getLogger("custom_components.dirigera_platform")
 
@@ -192,14 +193,11 @@ async def add_air_purifier_sensors(async_add_entities, air_purifiers):
 
 async def add_controllers_sensors(hass, async_add_entities, hub, controllers):
     logger.debug("Starting to add controller sensors...")
-    # Controllers with more than one button are returned as separate controllers
-    # their uniqueid has _1, _2 suffixes. Only the primary controller has
-    # battery % attribute which we shall use to identify
-    controller_entities = []
+    # Multi-button controllers (BILRESA, SOMRIG, RODRET, STYRBAR, ...) are
+    # returned by the hub as N separate controller devices that share a
+    # relation_id. Each half still needs its own empty scene so that its
+    # own button presses generate remotePressEvents.
     for controller in controllers:
-        # Create empty scenes so that button clicks generate events on the hub.
-        # Some controllers (e.g., BILRESA dual button) have empty can_send
-        # but still send remotePressEvent when linked to a device in IKEA app.
         clicks_supported = controller._json_data.capabilities.can_send
         clicks_supported = [ x for x in clicks_supported if x.endswith("Press") ]
 
@@ -209,11 +207,29 @@ async def add_controllers_sensors(hass, async_add_entities, hub, controllers):
             logger.debug(f"Will be creating empty scene for {controller._json_data.id}")
             await hass.async_add_executor_job(hub.create_empty_scene,controller._json_data.id, clicks_supported)
 
-        # Register ALL controllers that have battery_percentage as entities,
-        # regardless of can_send capabilities. This ensures they're in the
-        # device registry and can receive remotePressEvent button events.
-        if getattr(controller._json_data.attributes,"battery_percentage",None) is not None:
-            controller_entities.append(controller)
+    # Group by physical device and elect one primary per group: only the
+    # primary becomes an HA entity. Rebind the other halves' device_registry
+    # entries to the primary so that remotePressEvents arriving for *their*
+    # dirigera id still resolve to an HA-registered entity (needed for
+    # entity.registry_entry.device_id / entity_id in hub_event_listener).
+    groups = {}
+    for controller in controllers:
+        groups.setdefault(controller.device_identifier, []).append(controller)
+
+    controller_entities = []
+    for group in groups.values():
+        primary = next(
+            (c for c in group
+             if getattr(c._json_data.attributes, "battery_percentage", None) is not None),
+            None,
+        )
+        if primary is None:
+            continue
+        controller_entities.append(primary)
+        for other in group:
+            if other is primary:
+                continue
+            hub_event_listener.device_registry[other._json_data.id] = registry_entry(primary)
 
     logger.debug("Found {} controller devices to setup...".format(len(controller_entities)))
     async_add_entities(controller_entities)

@@ -219,8 +219,24 @@ class DeviceDiscoveryCoordinator:
                 return ikea_bulb(self._hub, light)
 
             elif device_type == "outlet":
-                # Outlet: wrapper -> HA entity
-                outlet = dict_to_outlet(device_data, self._hub)
+                # Outlet: wrapper -> HA entity.
+                # Use get_outlet_by_id() so the energy-attribute merge from the
+                # linked electricalSensor (GRILLPLATS / TOFSMYGGA) is applied to
+                # outlets discovered at runtime via ADD events. Without this,
+                # only outlets present at integration startup get power/energy
+                # data; runtime-added plugs require an integration restart.
+                # See issue #31.
+                outlet_id = device_data.get("id")
+                try:
+                    outlet = self._hub.get_outlet_by_id(outlet_id)
+                except Exception as e:
+                    logger.warning(
+                        "get_outlet_by_id failed for runtime-discovered outlet "
+                        "%s (%s); falling back to raw payload without energy "
+                        "merge. Energy sensors may be missing until integration "
+                        "restart.", outlet_id, e
+                    )
+                    outlet = dict_to_outlet(device_data, self._hub)
                 device_wrapper = ikea_outlet_device(self._hass, self._hub, outlet)
                 return ikea_outlet_switch_sensor(device_wrapper)
 

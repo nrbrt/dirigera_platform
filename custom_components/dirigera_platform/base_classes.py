@@ -343,7 +343,11 @@ class ikea_water_sensor(ikea_base_device_sensor, BinarySensorEntity):
     def __init__(self, device : ikea_water_sensor_device):
         logger.debug("ikea_water_sensor ctor...")
         super().__init__(device)
-    
+
+    @property
+    def device_class(self) -> str:
+        return BinarySensorDeviceClass.MOISTURE
+
     @property
     def is_on(self):
         return self._device.water_leak_detected

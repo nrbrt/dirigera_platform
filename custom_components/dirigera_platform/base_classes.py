@@ -35,8 +35,9 @@ from dirigera.devices.air_purifier import FanModeEnum
 from .hub_event_listener import hub_event_listener, registry_entry
 from .const import DOMAIN
 
-from enum import Enum 
-import logging 
+from enum import Enum
+import asyncio
+import logging
 import math
 import datetime
 
@@ -162,7 +163,47 @@ class ikea_base_device:
             logger.error("error encountered running update on : {}".format(self.name))
             logger.error(ex)
             raise HomeAssistantError(ex, DOMAIN, "hub_exception")
-    
+
+    async def _throttled_update(self, ttl_seconds: int = 30) -> None:
+        """Throttled, concurrency-safe device refresh for multi-entity devices.
+
+        Multi-entity devices (environment sensors, air purifiers) share one
+        backing device object, and Home Assistant polls all of their entities
+        concurrently. Without coordination, every poll cycle fires one HTTPS
+        request per entity to the (often slow) hub at the same instant -- the
+        plain ``_updated_at`` check is a check-then-act race across the
+        ``await`` point, so all entities pass it before any has refreshed the
+        timestamp. On a busy hub this causes connection pile-ups and SSL
+        handshake timeouts ("hub does not respond within 10 seconds").
+
+        Double-checked locking collapses this to exactly one hub request per
+        device per ``ttl_seconds``: entities that queue behind the winner see
+        a fresh timestamp inside the lock and skip the request entirely.
+
+        Callers must define ``self._updated_at`` (init ``None``) and
+        ``self._update_lock`` (``asyncio.Lock``). Uses ``self._get_by_id_fx``
+        (set in ``__init__``) as the fetch function.
+        """
+        # Fast path: throttle window still active -> no lock, no request
+        if (self._updated_at is not None
+                and (datetime.datetime.now() - self._updated_at).total_seconds() <= ttl_seconds):
+            return
+        async with self._update_lock:
+            # Re-check inside the lock: the first coroutine to acquire it
+            # performs the fetch and refreshes _updated_at; entities queued
+            # behind it now see a fresh timestamp and return without a request.
+            if (self._updated_at is not None
+                    and (datetime.datetime.now() - self._updated_at).total_seconds() <= ttl_seconds):
+                return
+            try:
+                logger.debug(f"throttled update fetching from hub for {self.name}")
+                self._json_data = await self._hass.async_add_executor_job(self._get_by_id_fx, self._json_data.id)
+                self._updated_at = datetime.datetime.now()
+            except Exception as ex:
+                logger.error("error encountered running update on : {}".format(self.name))
+                logger.error(ex)
+                raise HomeAssistantError(ex, DOMAIN, "hub_exception")
+
     # To ensure state update of hass is cascaded
     def async_schedule_update_ha_state(self, force_refresh:bool = False) -> None:
         for listener in self._listeners:
@@ -435,18 +476,13 @@ class ikea_blinds_sensor(ikea_base_device_sensor, CoverEntity):
 class ikea_vindstyrka_device(ikea_base_device):
     def __init__(self, hass:core.HomeAssistant, hub:Hub , json_data:EnvironmentSensor) -> None:
         super().__init__(hass, hub, json_data, hub.get_environment_sensor_by_id)
-        self._updated_at = None 
+        self._updated_at = None
+        self._update_lock = asyncio.Lock()
 
-    async def async_update(self):        
-        if self._updated_at is None or (datetime.datetime.now() - self._updated_at).total_seconds() > 30:
-            try:
-                logger.debug("env sensor update called...")
-                self._json_data = await self._hass.async_add_executor_job(self._hub.get_environment_sensor_by_id, self._json_data.id)
-                self._updated_at = datetime.datetime.now()
-            except Exception as ex:
-                logger.error(f"error encountered running update on : {self.name}")
-                logger.error(ex)
-                raise HomeAssistantError(ex, DOMAIN, "hub_exception")
+    async def async_update(self):
+        # Shared multi-entity throttle+lock: one hub request per device per 30s.
+        # See ikea_base_device._throttled_update for the rationale (issue #34).
+        await self._throttled_update()
 
 class ikea_vindstyrka_temperature(ikea_base_device_sensor, SensorEntity):
     def __init__(self, device: ikea_vindstyrka_device) -> None:
@@ -607,6 +643,7 @@ class ikea_starkvind_air_purifier_device(ikea_base_device):
         logger.debug("Air purifer Fan device ctor ...")
         super().__init__(hass, hub, json_data, hub.get_air_purifier_by_id)
         self._updated_at = None
+        self._update_lock = asyncio.Lock()
 
     @property
     def supported_features(self) -> FanEntityFeature:
@@ -635,17 +672,9 @@ class ikea_starkvind_air_purifier_device(ikea_base_device):
         #return self.fan_mode
     
     async def async_update(self):
-        if (
-            self._updated_at is None
-            or (datetime.datetime.now() - self._updated_at).total_seconds() > 30
-        ):
-            try:
-                self._json_data = await self._hass.async_add_executor_job(self._hub.get_air_purifier_by_id, self._json_data.id)
-                self._updated_at = datetime.datetime.now()
-            except Exception as ex:
-                logger.error("error encountered running update on : {}".format(self.name))
-                logger.error(ex)
-                raise HomeAssistantError(ex, DOMAIN, "hub_exception")
+        # Shared multi-entity throttle+lock: one hub request per device per 30s.
+        # See ikea_base_device._throttled_update for the rationale (issue #34).
+        await self._throttled_update()
 
     async def async_set_percentage(self, percentage: int) -> None:
         # Convert percent to speed

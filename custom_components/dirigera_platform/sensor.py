@@ -118,8 +118,6 @@ async def add_environment_sensors(async_add_entities, env_devices):
             env_sensors.append(ikea_vindstyrka_pm25(env_device, WhichPM25.MIN))
         if getattr(env_device,"voc_index", None) is not None:
             env_sensors.append(ikea_vindstyrka_voc_index(env_device))
-        if getattr(env_device,"current_c_o2") is not None:
-            env_sensors.append(ikea_alpstuga_co2(env_device))
         if getattr(env_device,"current_c_o2", None) is not None:
             env_sensors.append(ikea_alpstuga_co2(env_device))
 

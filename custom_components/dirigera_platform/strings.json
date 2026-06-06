@@ -31,6 +31,8 @@
     },
     "device_automation": {
       "trigger_type": {
+        "turned_on": "{entity_name} Turned On",
+        "turned_off": "{entity_name} Turned Off",
         "single_click": "{entity_name} Single Click",
         "long_press": "{entity_name} Long Press",
         "double_click": "{entity_name} Double Click",

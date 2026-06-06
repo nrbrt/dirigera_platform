@@ -53,6 +53,8 @@
   },
   "device_automation": {
     "trigger_type": {
+      "turned_on": "{entity_name} Ligado",
+      "turned_off": "{entity_name} Desligado",
       "single_click": "{entity_name} Clique Único",
       "long_press": "{entity_name} Pressão Longa",
       "double_click": "{entity_name} Duplo Clique",

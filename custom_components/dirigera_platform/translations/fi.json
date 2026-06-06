@@ -53,6 +53,8 @@
   },
   "device_automation": {
     "trigger_type": {
+      "turned_on": "{entity_name} Kytketty päälle",
+      "turned_off": "{entity_name} Kytketty pois päältä",
       "single_click": "{entity_name} Yksi painallus",
       "long_press": "{entity_name} Pitkä painallus",
       "double_click": "{entity_name} Kaksoispainallus",

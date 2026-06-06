@@ -53,6 +53,8 @@
     },
     "device_automation": {
       "trigger_type": {
+        "turned_on": "{entity_name} 已開啟",
+        "turned_off": "{entity_name} 已關閉",
         "single_click": "{entity_name} 單擊",
         "long_press": "{entity_name} 長按",
         "double_click": "{entity_name} 雙擊",

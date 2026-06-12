@@ -938,9 +938,14 @@ class current_amps_sensor(ikea_base_device_sensor, SensorEntity):
     
     @property
     def native_value(self):
+        # Some third-party outlets (e.g. SONOFF) keep reporting the last
+        # measured value after the relay switches off (#36) — clamp
+        # instantaneous measurements to 0 while the outlet is off.
+        if not getattr(self._device, "is_on", True):
+            return 0
         return getattr(self._device, "current_amps")
 
-class current_active_power_sensor(ikea_base_device_sensor, SensorEntity):   
+class current_active_power_sensor(ikea_base_device_sensor, SensorEntity):
     def __init__(self, device):
         super().__init__(
                             device = device, 
@@ -953,6 +958,10 @@ class current_active_power_sensor(ikea_base_device_sensor, SensorEntity):
 
     @property
     def native_value(self):
+        # See current_amps_sensor: clamp to 0 while off (#36). Voltage is
+        # deliberately NOT clamped — line voltage at the terminals is real.
+        if not getattr(self._device, "is_on", True):
+            return 0
         return getattr(self._device, "current_active_power")
     
 class current_voltage_sensor(ikea_base_device_sensor, SensorEntity):

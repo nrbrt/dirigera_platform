@@ -5,7 +5,6 @@ from homeassistant.core import HomeAssistantError
 from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass, SensorEntity
 from homeassistant.components.binary_sensor import BinarySensorDeviceClass, BinarySensorEntity
 from homeassistant.components.cover import CoverDeviceClass, CoverEntity,CoverEntityFeature
-from homeassistant.components.datetime import DateTimeEntity
 from homeassistant.helpers.entity import DeviceInfo, Entity, EntityCategory
 from homeassistant.components.fan import FanEntity, FanEntityFeature
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
@@ -41,9 +40,9 @@ import logging
 import math
 import datetime
 
-logger = logging.getLogger("custom_components.dirigera_platform")
+from dateutil import parser
 
-DATE_TIME_FORMAT:str = "%Y-%m-%dT%H:%M:%S.%fZ"
+logger = logging.getLogger("custom_components.dirigera_platform")
 
 def induce_properties(class_to_induce, attr):
     for key in attr.keys():
@@ -990,10 +989,28 @@ class energy_consumed_at_last_reset_sensor(ikea_base_device_sensor, SensorEntity
     def native_value(self):
         return getattr(self._device, "energy_consumed_at_last_reset")
 
-class time_of_last_energy_reset_sensor(ikea_base_device_sensor, DateTimeEntity):
+def _as_aware_datetime(value):
+    """Return a tz-aware datetime for a model value that may arrive as str.
+
+    The pydantic model normally delivers tz-aware datetimes; hub events can
+    leave an ISO string in the attributes. SensorDeviceClass.TIMESTAMP
+    requires a tz-aware datetime (or None)."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        try:
+            value = parser.parse(value)
+        except (ValueError, OverflowError):
+            logger.warning(f"Could not parse timestamp value : {value}")
+            return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=datetime.timezone.utc)
+    return value
+
+class time_of_last_energy_reset_sensor(ikea_base_device_sensor, SensorEntity):
     def __init__(self, device):
         super().__init__(
-                            device = device, 
+                            device = device,
                             id_suffix="TLER01",
                             device_class=SensorDeviceClass.TIMESTAMP,
                             name="Time of Last Energy Reset",
@@ -1001,56 +1018,17 @@ class time_of_last_energy_reset_sensor(ikea_base_device_sensor, DateTimeEntity):
 
     @property
     def native_value(self):
-        # Hack
-        value = getattr(self._device, "time_of_last_energy_reset")
-        if type(value) == str:
-            #convert to datetime
-            logger.debug(f"Found time_of_last_energy_reset as string attempting convert to datetime")
-            self.time_of_last_energy_reset = value 
-        return getattr(self._device, "time_of_last_energy_reset")
+        return _as_aware_datetime(getattr(self._device, "time_of_last_energy_reset"))
 
-    @property
-    def time_of_last_energy_reset(self):
-        return self.native_value()
-    
-    @time_of_last_energy_reset.setter
-    def time_of_last_energy_reset(self, value):
-        # This is called from hub events where its a str
-        try:
-            dt_value = datetime.datetime.strptime(value, DATE_TIME_FORMAT)
-            setattr(self._device,"time_of_last_energy_reset",dt_value)
-        except:
-            logger.warning(f"Failed to set time_of_last_energy_reset in sensor using value : {value}")
- 
-class total_energy_consumed_last_updated_sensor(ikea_base_device_sensor, DateTimeEntity):
-    def __init__(self, device):
-        super().__init__(   device,
-                            id_suffix="TECLU01",
-                            name="Total Energy Consumed Last Updated",
-                            device_class=SensorDeviceClass.TIMESTAMP,
-                            icon="mdi:update")
-    
+class total_energy_consumed_last_updated_sensor(ikea_base_device_sensor, SensorEntity):
     def __init__(self, device):
         super().__init__(
-                            device = device, 
+                            device = device,
                             id_suffix="TECLU01",
                             device_class=SensorDeviceClass.TIMESTAMP,
-                            name="Time Energy Consumed Last Updated",
+                            name="Total Energy Consumed Last Updated",
                             icon="mdi:update")
 
     @property
     def native_value(self):
-        return getattr(self._device, "total_energy_consumed_last_updated")
-    
-    @property
-    def total_energy_consumed_last_updated(self):
-        return self.native_value()
-    
-    @total_energy_consumed_last_updated.setter
-    def time_of_last_energy_reset(self, value):
-        # This is called from hub events where its a str
-        try:
-            dt_value = datetime.datetime.strptime(value, DATE_TIME_FORMAT)
-            setattr(self._device,"total_energy_consumed_last_updated",dt_value)
-        except:
-            logger.warning(f"Failed to set total_energy_consumed_last_updated in sensor using value : {value}")
+        return _as_aware_datetime(getattr(self._device, "total_energy_consumed_last_updated"))

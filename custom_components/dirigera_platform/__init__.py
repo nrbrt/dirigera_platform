@@ -1,7 +1,6 @@
 """Platform for IKEA dirigera hub integration."""
 from __future__ import annotations
 
-import asyncio
 import logging
 
 from dirigera import Hub 
@@ -43,8 +42,6 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
     }
 )
 
-hub_events = None 
-
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     logger.debug("Starting async_setup...")
     #for k in config.keys():
@@ -55,9 +52,18 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         import dirigera
 
         logger.info("=== START Devices JSON ===")
-        key = list(hass.data[DOMAIN].keys())[0]
-        
-        config_data = hass.data[DOMAIN][key]
+        # hass.data[DOMAIN] also holds the PLATFORM gateway object and the
+        # discovery coordinator; after a reload the entry dict is re-inserted
+        # last, so blindly taking keys()[0] picked the wrong object and the
+        # service crashed. Select the config-entry dict explicitly.
+        config_data = next(
+            (v for v in hass.data[DOMAIN].values()
+             if isinstance(v, dict) and CONF_IP_ADDRESS in v),
+            None,
+        )
+        if config_data is None:
+            logger.warning("dump_data: no configured hub entry found")
+            return
         ip = config_data[CONF_IP_ADDRESS]
         token = config_data[CONF_TOKEN]
         
@@ -89,15 +95,16 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
                     
                 if "relationId" in device_json:
                     id_value = device_json["relationId"]
-                    id_to_replace = id_counter 
-                    
+                    id_to_replace = id_counter
+
                     if id_value in master_id_map:
                         id_to_replace = master_id_map[id_value]
                     else:
                         id_counter = id_counter + 1
                         master_id_map[id_value] = id_to_replace
-                    
-                    device_json["id"] = id_to_replace
+
+                    # used to overwrite "id" again, leaving relationId unsanitized
+                    device_json["relationId"] = id_to_replace
                 
                 if "attributes" in device_json and "serialNumber" in device_json["attributes"]:
                     id_value = device_json["attributes"]["serialNumber"]
@@ -137,18 +144,21 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
                             
                             device_set["id"]= id_to_replace
                 
-                if "remote_link" in device_json["remoteLinks"]:
+                # remoteLinks is a list of device-id strings. The old code
+                # tested for the literal "remote_link" (never true), would
+                # KeyError when the key was absent, and read a stale loop
+                # variable from the deviceSet block above.
+                if "remoteLinks" in device_json and device_json["remoteLinks"]:
+                    sanitized_links = []
                     for remote_link in device_json["remoteLinks"]:
-                        id_value = device_set["id"]
-                        id_to_replace = id_counter 
-                        
-                        if id_value in master_id_map:
-                            id_to_replace = master_id_map[id_value]
+                        if remote_link in master_id_map:
+                            id_to_replace = master_id_map[remote_link]
                         else:
+                            id_to_replace = id_counter
                             id_counter = id_counter + 1
-                            master_id_map[id_value] = id_to_replace
-                        
-                        remote_link["id"]= id_to_replace
+                            master_id_map[remote_link] = id_to_replace
+                        sanitized_links.append(id_to_replace)
+                    device_json["remoteLinks"] = sanitized_links
                 
             logger.info(json_resp)
         logger.info("--------------")
@@ -161,7 +171,6 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 async def async_setup_entry(
     hass: core.HomeAssistant, entry: config_entries.ConfigEntry
 ) -> bool:
-    global hub_events
     """Set up platform from a ConfigEntry."""
     logger.info("Staring async_setup_entry in init...")
     
@@ -180,12 +189,10 @@ async def async_setup_entry(
         hass_data[CONF_HIDE_DEVICE_SET_BULBS] = hide_device_set_bulbs
 
     ip = hass_data[CONF_IP_ADDRESS]
-    # Registers update listener to update config entry when options are updated.
-    unsub_options_update_listener = entry.add_update_listener(options_update_listener)
+    # Register the options-update listener exactly once; async_on_unload also
+    # cleans it up when setup fails. It used to be registered twice (once
+    # manually, once here), so every options save triggered two reloads.
     entry.async_on_unload(entry.add_update_listener(options_update_listener))
-
-    # Store a reference to the unsubscribe function to cleanup if an entry is unloaded.
-    hass_data["unsub_options_update_listener"] = unsub_options_update_listener
     hass.data[DOMAIN][entry.entry_id] = hass_data
 
     hass_data = dict(entry.data)
@@ -221,10 +228,19 @@ async def async_setup_entry(
     if hass_data[CONF_IP_ADDRESS] != "mock":
         hub_events = hub_event_listener(hub_basic, hass, discovery)
         hub_events.start()
-        # Sync device names and areas from Dirigera to HA device registry
-        # This ensures names and areas are set correctly after HA restart
-        await hub_events.sync_all_device_names()
-        await hub_events.sync_all_device_areas()
+        try:
+            # Sync device names and areas from Dirigera to HA device registry
+            # This ensures names and areas are set correctly after HA restart
+            await hub_events.sync_all_device_names()
+            await hub_events.sync_all_device_areas()
+        except Exception:
+            # Setup is about to fail — without this, the listener thread kept
+            # running and every ConfigEntryNotReady retry started another one.
+            await hass.async_add_executor_job(hub_events.stop)
+            raise
+        # Per-entry storage instead of a module global: a second hub entry no
+        # longer clobbers the first listener, and unload stops the right one.
+        hass.data[DOMAIN][entry.entry_id]["hub_events"] = hub_events
 
     logger.debug("Complete async_setup_entry...")
 
@@ -241,42 +257,33 @@ async def options_update_listener(
 async def async_unload_entry(
     hass: core.HomeAssistant, entry: config_entries.ConfigEntry
 ) -> bool:
-    global hub_events
+    """Unload a config entry."""
     # Called during re-load and delete
     logger.debug("Starting async_unload_entry")
 
-    #Stop the listener
+    entry_data = hass.data[DOMAIN].get(entry.entry_id, {})
+
+    # Stop the listener. stop() joins the websocket thread (worst case the
+    # full reconnect backoff), so run it in the executor — calling it
+    # directly used to freeze the event loop during unload/reload.
+    hub_events = entry_data.get("hub_events")
     if hub_events is not None:
-        hub_events.stop()
-        hub_events = None 
+        await hass.async_add_executor_job(hub_events.stop)
 
     hass_data = dict(entry.data)
     hub = HubX(hass_data[CONF_TOKEN], hass_data[CONF_IP_ADDRESS])
-    
+
     # For each controller if there is an empty scene delete it
     logger.debug("In unload so forcing delete of scenes...")
     await hass.async_add_executor_job(hub.delete_empty_scenes)
     logger.debug("Done deleting empty scenes....")
-    
-    """Unload a config entry."""
-    unload_ok = all(
-        [
-            await asyncio.gather(
-                *[
-                    hass.config_entries.async_forward_entry_unload(entry, "light"),
-                    hass.config_entries.async_forward_entry_unload(entry, "switch"),
-                    hass.config_entries.async_forward_entry_unload(entry, "binary_sensor"),
-                    hass.config_entries.async_forward_entry_unload(entry, "sensor"),
-                    hass.config_entries.async_forward_entry_unload(entry, "cover"),
-                    hass.config_entries.async_forward_entry_unload(entry, "fan"),
-                    hass.config_entries.async_forward_entry_unload(entry, "scene"),
-                ]
-            )
-        ]
-    )
-    
-    hass.data[DOMAIN][entry.entry_id]["unsub_options_update_listener"]()
-    hass.data[DOMAIN].pop(entry.entry_id)
+
+    # all() over the gather result list itself — the old all([gather])
+    # wrapped it in another list and was therefore always True.
+    unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS_TO_SETUP)
+
+    # The options-update listener is removed via entry.async_on_unload.
+    hass.data[DOMAIN].pop(entry.entry_id, None)
     logger.debug("Successfully popped entry")
     logger.debug("Complete async_unload_entry")
 

@@ -431,10 +431,16 @@ class ikea_blinds_sensor(ikea_base_device_sensor, CoverEntity):
 
     @property
     def current_cover_position(self):
+        # blinds_current_level is Optional in the dirigera model — None until
+        # the hub has reported a level. 100 - None would raise TypeError.
+        if self._device.blinds_current_level is None:
+            return None
         return 100 - self._device.blinds_current_level
 
     @property
     def target_cover_position(self):
+        if self._device.blinds_target_level is None:
+            return None
         return 100 - self._device.blinds_target_level
 
     @property
@@ -445,7 +451,7 @@ class ikea_blinds_sensor(ikea_base_device_sensor, CoverEntity):
 
     @property
     def is_closing(self):
-        if self.current_cover_position is None or self.target_cover_position is False:
+        if self.current_cover_position is None or self.target_cover_position is None:
             return False
 
         if self.current_cover_position != 0 and self.target_cover_position == 0:
@@ -455,7 +461,7 @@ class ikea_blinds_sensor(ikea_base_device_sensor, CoverEntity):
 
     @property
     def is_opening(self):
-        if self.current_cover_position is None or self.target_cover_position is False:
+        if self.current_cover_position is None or self.target_cover_position is None:
             return False
 
         if self.current_cover_position != 100 and self.target_cover_position == 100:

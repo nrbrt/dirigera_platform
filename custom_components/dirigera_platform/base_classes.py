@@ -5,9 +5,8 @@ from homeassistant.core import HomeAssistantError
 from homeassistant.components.sensor import SensorDeviceClass, SensorStateClass, SensorEntity
 from homeassistant.components.binary_sensor import BinarySensorDeviceClass, BinarySensorEntity
 from homeassistant.components.cover import CoverDeviceClass, CoverEntity,CoverEntityFeature
-from homeassistant.helpers.entity import DeviceInfo, Entity, EntityCategory
+from homeassistant.helpers.entity import DeviceInfo, Entity
 from homeassistant.components.fan import FanEntity, FanEntityFeature
-from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.components.switch import SwitchDeviceClass, SwitchEntity
 from homeassistant.const import (
     EVENT_HOMEASSISTANT_STOP,
@@ -573,12 +572,12 @@ class ikea_vindstyrka_pm25(ikea_base_device_sensor, SensorEntity):
 class ikea_vindstyrka_voc_index(ikea_base_device_sensor, SensorEntity):
     def __init__(self, device: ikea_vindstyrka_device) -> None:
         logger.debug("ikea_vindstyrka_voc_index ctor...")
+        # The hub reports a Sensirion-style dimensionless VOC *index* (1-500),
+        # not a concentration — declaring it as VOC µg/m³ corrupted statistics.
         super().__init__(
             device,
             id_suffix="VOC",
             name="VOC Index",
-            device_class=SensorDeviceClass.VOLATILE_ORGANIC_COMPOUNDS,
-            native_unit_of_measurement=CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
             state_class="measurement")
 
     @property
@@ -624,8 +623,18 @@ class ikea_controller_device(ikea_base_device, SensorEntity):
             logger.debug(f"Set #buttons to {self._buttons} as controller model is : {json_data.attributes.model}")
         
         super().__init__(hass , hub, json_data, hub.get_controller_by_id)
-        self.skip_update = True 
-        
+        self.skip_update = True
+
+    def schedule_update_ha_state(self, force_refresh: bool = False) -> None:
+        # This device IS its own HA entity (no separate sensor wrapper), so a
+        # hub push event must reach Entity.schedule_update_ha_state directly:
+        # the base-device fan-out only forwards to _listeners, which is empty
+        # for controllers — battery events were silently dropped and the
+        # state only converged via polling.
+        if self.hass is None:
+            return
+        Entity.schedule_update_ha_state(self, force_refresh)
+
     @property
     def entity_category(self):
         return EntityCategory.DIAGNOSTIC
@@ -850,17 +859,13 @@ class ikea_starkvind_air_purifier_binary_sensor(ikea_base_device_sensor, BinaryS
                             icon=icon_name)
         
         self._native_value_prop = native_value_prop
-        device.add_listener(self)
-    
+        # NOTE: no device.add_listener(self) here — ikea_base_device_sensor's
+        # __init__ already registers this entity; doing it again doubled every
+        # state update for this sensor.
+
     @property
     def is_on(self):
         return getattr(self._device, self._native_value_prop)
-        
-    def async_turn_off(self):
-        pass
-
-    def async_handle_turn_on_service(self):
-        pass
 
 class ikea_starkvind_air_purifier_switch_sensor(ikea_base_device_sensor, SwitchEntity):
     def __init__(
@@ -876,7 +881,7 @@ class ikea_starkvind_air_purifier_switch_sensor(ikea_base_device_sensor, SwitchE
                             device,
                             id_suffix=prefix,
                             name=prefix,
-                            device_class=SwitchDeviceClass.OUTLET,
+                            device_class=SwitchDeviceClass.SWITCH,
                             icon=icon_name)
         self._is_on_prop = is_on_prop
         self._turn_on_off = getattr(self._device, turn_on_off_fx)

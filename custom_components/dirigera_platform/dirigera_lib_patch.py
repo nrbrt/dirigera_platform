@@ -4,10 +4,10 @@ from typing import Any, Dict, List, Optional
 from dirigera import Hub
 
 from dirigera.devices.device import Attributes, Device
-from dirigera.devices.outlet import Outlet, OutletAttributes, dict_to_outlet
+from dirigera.devices.outlet import Outlet, dict_to_outlet
 from dirigera.devices.environment_sensor import EnvironmentSensor, dict_to_environment_sensor
 from dirigera.hub.abstract_smart_home_hub import AbstractSmartHomeHub
-from dirigera.devices.scene import Info, Icon,  SceneType, Trigger, TriggerDetails, ControllerType
+from dirigera.devices.scene import Info, Icon, Trigger, TriggerDetails, ControllerType
 import logging
 
 logger = logging.getLogger("custom_components.dirigera_platform")
@@ -45,7 +45,7 @@ class HubX(Hub):
         return HackScene.make_scene(self, data)
     
     def create_empty_scene(self, controller_id: str, clicks_supported:list):
-        logging.debug(f"Creating empty scene for controller : {controller_id} with clicks : {clicks_supported}")
+        logger.debug(f"Creating empty scene for controller : {controller_id} with clicks : {clicks_supported}")
         for click in clicks_supported:
             scene_name = f'dirigera_integration_empty_scene_{controller_id}_{click}'
             info = Info(name=f'dirigera_integration_empty_scene_{controller_id}_{click}', icon=Icon.SCENES_CAKE)
@@ -79,7 +79,7 @@ class HubX(Hub):
         scenes = self.get_scenes()
         for scene in scenes:
             if scene.name.startswith("dirigera_integration_empty_scene_"):
-                logging.debug(f"Deleting Scene id: {scene.id} name: {scene.name}...")
+                logger.debug(f"Deleting Scene id: {scene.id} name: {scene.name}...")
                 self.delete_scene(scene.id)
 
     def get_outlets(self) -> list:
@@ -100,8 +100,6 @@ class HubX(Hub):
             rel_id = sensor.get("relationId")
             if rel_id:
                 energy_by_relation[rel_id] = sensor.get("attributes", {})
-                # Also store the sensor device ID for event listener mapping
-                energy_by_relation[rel_id]["_sensor_device_id"] = sensor.get("id")
 
         # Merge energy attributes into outlets that have a matching relationId
         energy_attrs = [
@@ -139,21 +137,6 @@ class HubX(Hub):
             if outlet.id == id_:
                 return outlet
         raise ValueError(f"No outlet found with id {id_}")
-
-    def get_electrical_sensor_map(self) -> dict:
-        """
-        Returns a mapping of electricalSensor device IDs to their parent outlet device IDs.
-        Used by the event listener to route energy update events to the correct outlet entity.
-        """
-        devices = self.get("/devices")
-        outlets = {d.get("relationId"): d.get("id") for d in devices if d["type"] == "outlet" and d.get("relationId")}
-        sensor_to_outlet = {}
-        for d in devices:
-            if d.get("deviceType") == "electricalSensor":
-                rel_id = d.get("relationId")
-                if rel_id and rel_id in outlets:
-                    sensor_to_outlet[d["id"]] = outlets[rel_id]
-        return sensor_to_outlet
 
     def get_environment_sensors(self) -> list:
         """
@@ -286,14 +269,13 @@ class HackScene():
         return HackScene(dirigera_client, id, name, icon)
     
     def reload(self) -> HackScene:
-        data = self.dirigera_client.get(route=f"/scenes/{self.id}")
-        return HackScene.make_scene(self, data)
-        #return Scene(dirigeraClient=self.dirigera_client, **data)
+        data = self.hub.get(f"/scenes/{self.id}")
+        return HackScene.make_scene(self.hub, data)
 
-    def trigger(self) -> HackScene:
+    def trigger(self) -> None:
         self.hub.post(route=f"/scenes/{self.id}/trigger")
 
-    def undo(self) -> HackScene:
+    def undo(self) -> None:
         self.hub.post(route=f"/scenes/{self.id}/undo")
 
 

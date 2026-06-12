@@ -68,7 +68,10 @@ class ikea_scene(Scene):
         """Fetch updated scene definition from Dirigera."""
         logger.debug("Updating scene '%s' (%s)", self.name, self.unique_id)
         try:
-            self._dirigera_scene = await self.hass.async_add_executor_job(self._hub.get_scene_by_id, self.unique_id)
+            # NB: assign to _scene (the attribute name/icon/activate read) —
+            # this used to write to a never-read _dirigera_scene leftover,
+            # so hub-side scene renames/icon changes never propagated.
+            self._scene = await self.hass.async_add_executor_job(self._hub.get_scene_by_id, self.unique_id)
         except Exception as ex:
             logger.error("Error encountered on update of '%s' (%s)", self.name, self.unique_id)
             logger.error(ex)

@@ -6,8 +6,7 @@ import json
 import re 
 import websocket
 import ssl
-import re
-from typing import Any 
+from typing import Any
 import datetime
 from dateutil import parser
 from dirigera import Hub
@@ -105,13 +104,14 @@ class hub_event_listener(threading.Thread):
     # Setups with only door/window sensors or plugs go silent between state
     # changes and get disconnected.
     #
-    # Fix: send a minimal application-level text frame every 25 minutes.
+    # Fix: send a minimal application-level text frame well within that window.
     KEEPALIVE_INTERVAL = 15 * 60  # seconds — well below the hub's ~60 min timeout
 
     def __init__(self, hub : Hub, hass, discovery_coordinator=None):
         super().__init__()
         self._hub : Hub = hub
         self._request_to_stop = False
+        self._stop_event = threading.Event()
         self._hass = hass
         self._loop = asyncio.get_event_loop()
         self._discovery_coordinator = discovery_coordinator
@@ -322,13 +322,14 @@ class hub_event_listener(threading.Thread):
             entity  = registry_value.entity
             
             unique_key = f"{entity.registry_entry.device_id}_{trigger_type}"
-            last_fired = datetime.datetime.now() 
-            if unique_key in controller_trigger_last_time_map:
-                last_fired = controller_trigger_last_time_map[unique_key]
+            # last_fired stays None when this key never fired — first events
+            # must not be debounced. The map only ever holds tz-aware parsed
+            # hub timestamps; the old code seeded it with a naive now(), which
+            # made the first aware-minus-naive comparison raise TypeError.
+            last_fired = controller_trigger_last_time_map.get(unique_key)
+            if last_fired is not None:
                 logger.debug(f"Found date/time in map for controller : {last_fired}")
-            
-            controller_trigger_last_time_map[unique_key] = datetime.datetime.now()
-                
+
             if "lastTriggered" in msg["data"]:
                 current_triggered_str = msg["data"]["lastTriggered"]
                 try: 
@@ -558,7 +559,7 @@ class hub_event_listener(threading.Thread):
             elif "type" in info:
                 device_type = info["type"]
             else:
-                logger.warn("expected type or deviceType in JSON, none found, ignoring...")
+                logger.warning("expected type or deviceType in JSON, none found, ignoring...")
                 return
 
             logger.debug(f"device type of message {device_type}")
@@ -674,6 +675,7 @@ class hub_event_listener(threading.Thread):
             has_attributes = "attributes" in info and info["attributes"] is not None
             name_changed = False
             new_name = None
+            skip_state_push = False
 
             if has_attributes:
                 attributes = info["attributes"]
@@ -709,8 +711,8 @@ class hub_event_listener(threading.Thread):
                         setattr(entity._json_data.attributes,key_attr, value_to_set)
                         logger.debug(f"Entity after setting: {entity._json_data}")
                     except Exception as ex:
-                        logger.warn(f"Failed to set attribute key: {key} converted to {key_attr} on device: {id}")
-                        logger.warn(ex)
+                        logger.warning(f"Failed to set attribute key: {key} converted to {key_attr} on device: {id}")
+                        logger.warning(ex)
                                 
                 # Update color_mode for lights when color attributes change.
                 # Guard with _supported_color_modes so we never set a mode the
@@ -725,11 +727,14 @@ class hub_event_listener(threading.Thread):
 
                 # Lights behave odd with hubs when setting attribute one event is generated which
                 # causes brightness or other to toggle so put in a hack to fix that
-                # if its is_on attribute then ignore this routine
+                # if its is_on attribute then ignore this routine.
+                # Only the redundant state push is skipped — a customName change
+                # piggybacked on the echo event must still reach the device
+                # registry update below (a bare return used to drop it).
                 if device_type == "light" and entity.should_ignore_update and not turn_on_off:
                     entity.reset_ignore_update()
                     logger.debug("Ignoring calling update_ha_state as ignore_update is set")
-                    return
+                    skip_state_push = True
 
                 # Update HA device registry name if customName changed
                 if name_changed and new_name is not None:
@@ -743,7 +748,7 @@ class hub_event_listener(threading.Thread):
                         logger.error(f"Failed to schedule device name update for {id}: {ex}")
 
             # Update HA state if attributes changed OR if reachability/room changed
-            if has_attributes or reachability_changed or room_changed:
+            if (has_attributes or reachability_changed or room_changed) and not skip_state_push:
                 entity.schedule_update_ha_state(False)
 
                 if registry_value.cascade_entity is not None:
@@ -751,11 +756,10 @@ class hub_event_listener(threading.Thread):
                     logger.debug(f"Cascading to cascade entity : {registry_value.cascade_entity.unique_id}")
                     registry_value.cascade_entity.schedule_update_ha_state(False)
 
-        except Exception as ex:
-            # Temp solution to not log entries
-            logger.debug("error processing hub event")
-            logger.debug(f"{ws_msg}")
-            logger.debug(ex)
+        except Exception:
+            # Visible at default log level: a swallowed DEBUG here used to hide
+            # every event-processing bug behind silently-stale entities.
+            logger.warning(f"error processing hub event: {ws_msg}", exc_info=True)
 
     def _send_keepalive(self):
         """Send an application-level text frame to reset the hub's inactivity timer.
@@ -798,11 +802,10 @@ class hub_event_listener(threading.Thread):
         session_duration = None
         if self._session_started_at is not None:
             session_duration = time.time() - self._session_started_at
-        logger.info(
-            f"Dirigera WebSocket closed (code={close_status_code}, msg={close_msg}, "
-            f"session_duration={session_duration:.0f}s" if session_duration is not None
-            else f"Dirigera WebSocket closed (code={close_status_code}, msg={close_msg})"
-        )
+        if session_duration is not None:
+            logger.info(f"Dirigera WebSocket closed (code={close_status_code}, msg={close_msg}, session_duration={session_duration:.0f}s)")
+        else:
+            logger.info(f"Dirigera WebSocket closed (code={close_status_code}, msg={close_msg})")
 
     def _on_open(self, ws):
         self._session_started_at = time.time()
@@ -834,15 +837,18 @@ class hub_event_listener(threading.Thread):
             self._stop_keepalive()
 
     def stop(self):
+        # NOTE: blocks until the thread exits — call from the event loop via
+        # hass.async_add_executor_job (see async_unload_entry).
         logger.info("Listener request for stop..")
 
         self._request_to_stop = True
+        self._stop_event.set()
         try:
             #self._hub.stop_event_listener()
             if self._wsapp is not None:
                 self._wsapp.close()
         except:
-            pass 
+            pass
         self.join()
         hub_event_listener.device_registry.clear()
         logger.info("Listener stopped..")
@@ -855,8 +861,9 @@ class hub_event_listener(threading.Thread):
             logger.debug("Listener thread complete...")
             if self._request_to_stop:
                 break
-            # Previously this message lied — it said "will sleep 10 seconds"
-            # but the code did not actually sleep. Fixed to honor the message.
-            logger.warn("Failed to create listener or listener exited, sleeping 10 seconds before retrying")
-            time.sleep(10)
-            time.sleep(10)
+            logger.warning("Failed to create listener or listener exited, sleeping 10 seconds before retrying")
+            # Interruptible: stop() sets the event so an unload/reload does
+            # not have to sit out the retry backoff. (This used to be two
+            # stacked time.sleep(10) calls — 20s, with the log saying 10.)
+            if self._stop_event.wait(timeout=10):
+                break

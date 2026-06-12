@@ -656,20 +656,28 @@ class ikea_starkvind_air_purifier_device(ikea_base_device):
 
     @property
     def preset_modes(self) -> list[str]:
-        return [e.value for e in FanModeEnum]
-    
+        # "off" and "on" are operating states, not selectable presets: HA turns
+        # the fan off via turn_off and runs manual speed via percentage.
+        return [
+            e.value
+            for e in FanModeEnum
+            if e not in (FanModeEnum.OFF, FanModeEnum.ON)
+        ]
+
     @property
-    def preset_mode(self) -> str:
-        if self.fan_mode == FanModeEnum.OFF:
-            return "off"
+    def preset_mode(self) -> str | None:
+        # None when off or in manual ("on") speed mode — HA's FanEntity.is_on
+        # derives on/off from preset_mode/percentage, so returning a string
+        # here would make the fan show as permanently on.
         if self.fan_mode == FanModeEnum.LOW:
             return "low"
         if self.fan_mode == FanModeEnum.MEDIUM:
             return "medium"
         if self.fan_mode == FanModeEnum.HIGH:
             return "high"
-        return "auto"
-        #return self.fan_mode
+        if self.fan_mode == FanModeEnum.AUTO:
+            return "auto"
+        return None
     
     async def async_update(self):
         # Shared multi-entity throttle+lock: one hub request per device per 30s.
@@ -710,7 +718,6 @@ class ikea_starkvind_air_purifier_device(ikea_base_device):
         logger.debug(f"Asked to set preset {preset_mode}")
         if mode_to_set is None:
             logger.error("Non defined preset used to set : {}".format(preset_mode))
-            self.preset_mode = mode_to_set
             return
 
         logger.debug("set_preset_mode equated to : {}".format(mode_to_set.value))
@@ -726,9 +733,11 @@ class ikea_starkvind_air_purifier_device(ikea_base_device):
             await self.async_set_percentage(percentage)
         else:
             logger.debug("We were asked to be turned on but percentage and preset were not set, using last known")
+            # preset_mode is None when the fan is off, and percentage is 0 then —
+            # re-sending either would leave the fan off, so fall back to auto.
             if self.preset_mode is not None:
                 await self.async_set_preset_mode(self.preset_mode)
-            elif self.percentage is not None:
+            elif self.percentage is not None and self.percentage > 0:
                 await self.async_set_percentage(self.percentage)
             else:
                 logger.debug("No last known value, setting to auto")

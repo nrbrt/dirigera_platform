@@ -66,7 +66,10 @@ async def async_setup_entry(
                 target_device_set = device_sets[id]
                 target_device_set.add_light(light)
                 
-                #if not hide_device_set_bulbs:
+                # NOTE: the hide_device_set_bulbs option is deliberately not
+                # applied here (upstream 43219ee): hiding member bulbs breaks
+                # the device-set brightness slider, which proxies through a
+                # member bulb entity. Member bulbs are therefore always added.
                 lights.append(light)
         else:
             lights.append(light)
@@ -150,11 +153,13 @@ class ikea_bulb(LightEntity):
             elif cap == "colorTemperature":
                 color_modes.append(ColorMode.COLOR_TEMP)
             elif cap == "colorHue" or cap == "colorSaturation":
-                color_modes.append(ColorMode.HS)
+                # colorHue and colorSaturation both map to HS — add it once
+                if ColorMode.HS not in color_modes:
+                    color_modes.append(ColorMode.HS)
 
         # Based on documentation here
         # https://developers.home-assistant.io/docs/core/entity/light#color-modes
-        if len(color_modes) > 1:
+        if len(color_modes) > 1 and ColorMode.BRIGHTNESS in color_modes:
             # If there are more color modes which means we have either temperature
             # or HueSaturation. then lets make sure BRIGHTNESS is not part of it
             # as per above documentation
@@ -210,17 +215,18 @@ class ikea_bulb(LightEntity):
     @property
     def brightness(self):
         # This is called by HASS so should be in the range
-        # of 0-100
+        # of 0-255
         scaled = int((self.light_level/ 100) * 255)
         return scaled
 
     @property
     def light_level(self):
-        # This is the state of the HUB so in 1-255 range
-        return self._json_data.attributes.light_level 
-    
+        # This is the state of the HUB so in 1-100 range
+        return self._json_data.attributes.light_level
+
     @light_level.setter
     def light_level(self, value):
+        # value is HASS brightness (0-255); the hub expects 1-100
         scaled = int((value/255)*100)
         if scaled < 1:
             scaled = 1
@@ -328,17 +334,23 @@ class ikea_bulb(LightEntity):
                     f"/devices/{self._json_data.id}",
                     [{"attributes": {"colorTemperature": ct}}]
                 )
+                # The direct patch bypasses the lib, so it does not update the
+                # local model (unlike set_light/set_light_color). Without this
+                # write-through, HA kept showing the old color temperature:
+                # the state write below read stale attributes and the hub echo
+                # is suppressed via _ignore_update.
+                self.color_temperature = ct
                 self._color_mode = ColorMode.COLOR_TEMP
                 self._ignore_update = True
 
             if ATTR_HS_COLOR in kwargs and ColorMode.HS in self._supported_color_modes:
                 logger.debug("Request to set color HS")
                 hs_tuple = kwargs[ATTR_HS_COLOR]
-                self._color_hue = hs_tuple[0]
-                self._color_saturation = hs_tuple[1] / 100
-                # Saturation is 0 - 1 at IKEA
+                hue = hs_tuple[0]
+                saturation = hs_tuple[1] / 100  # Saturation is 0 - 1 at IKEA
 
-                await self.hass.async_add_executor_job(self._json_data.set_light_color,self._color_hue, self._color_saturation)
+                # set_light_color updates the local model attributes itself
+                await self.hass.async_add_executor_job(self._json_data.set_light_color, hue, saturation)
                 self._color_mode = ColorMode.HS
                 self._ignore_update = True
             self.async_schedule_update_ha_state(False)
@@ -473,17 +485,18 @@ class ikea_bulb_device_set(LightEntity):
 
             if ATTR_BRIGHTNESS in kwargs:
                 # brightness requested
-                # the brightness sent by HASS will be in the range of 0-100 which has to be scaled
-                # to 1-255
+                # HASS sends brightness in the range 0-255; the hub expects 1-100
 
                 logger.debug("Request to device_set set brightness...")
                 level = int(kwargs[ATTR_BRIGHTNESS])
 
-                # This is in the 1-100 level so scale it 
+                # Clamp to the hub's 1-100 range: HA brightness 1-2 would
+                # otherwise scale to lightLevel 0, which is out of range.
+                scaled = max(1, min(100, round(level * 100 / 255)))
                 logger.debug("Set brightness : {}".format(level))
-                logger.debug("Set scaled brightness : {}".format(int((level / 255) * 100)))
-                await self.hass.async_add_executor_job(self.patch_command, {"lightLevel" : int((level / 255) * 100)})
-                self._controller._ignore_update = True 
+                logger.debug("Set scaled brightness : {}".format(scaled))
+                await self.hass.async_add_executor_job(self.patch_command, {"lightLevel" : scaled})
+                self._controller._ignore_update = True
 
             if ATTR_COLOR_TEMP_KELVIN in kwargs and ColorMode.COLOR_TEMP in self._controller.supported_color_modes:
                 # color temp requested
@@ -497,12 +510,11 @@ class ikea_bulb_device_set(LightEntity):
             if ATTR_HS_COLOR in kwargs and ColorMode.HS in self._controller.supported_color_modes:
                 logger.debug("Request to set color HS device_set")
                 hs_tuple = kwargs[ATTR_HS_COLOR]
-                self._color_hue = hs_tuple[0]
-                self._color_saturation = hs_tuple[1] / 100
-                # Saturation is 0 - 1 at IKEA
+                hue = hs_tuple[0]
+                saturation = hs_tuple[1] / 100  # Saturation is 0 - 1 at IKEA
                 self._controller._ignore_update = True
 
-                await self.hass.async_add_executor_job(self.patch_command,{ "colorHue" : self._color_hue, "colorSaturation" : self._color_saturation})
+                await self.hass.async_add_executor_job(self.patch_command,{ "colorHue" : hue, "colorSaturation" : saturation})
 
         except Exception as ex:
             logger.error("error encountered turning on device_set : {}".format(self.name))

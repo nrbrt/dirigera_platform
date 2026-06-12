@@ -63,7 +63,13 @@
       "button1_double_click": "{entity_name} Painike 1 - kaksoispainallus",
       "button2_single_click": "{entity_name} Painike 2 - yksi painallus",
       "button2_long_press": "{entity_name} Painike 2 - pitkä painallus",
-      "button2_double_click": "{entity_name} Painike 2 - kaksoispainallus"
+      "button2_double_click": "{entity_name} Painike 2 - kaksoispainallus",
+      "button3_single_click": "{entity_name} Painike 3 - yksi painallus",
+      "button3_double_click": "{entity_name} Painike 3 - kaksoispainallus",
+      "button3_long_press": "{entity_name} Painike 3 - pitkä painallus",
+      "button4_single_click": "{entity_name} Painike 4 - yksi painallus",
+      "button4_double_click": "{entity_name} Painike 4 - kaksoispainallus",
+      "button4_long_press": "{entity_name} Painike 4 - pitkä painallus"
     }
   }
 }

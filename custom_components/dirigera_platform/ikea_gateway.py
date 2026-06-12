@@ -67,7 +67,7 @@ class ikea_gateway:
         
         #Cover
         blinds = await hass.async_add_executor_job(hub.get_blinds)
-        logger.debug(f"Found {len(lights)} total of all blinds devices to setup...")
+        logger.debug(f"Found {len(blinds)} total of all blinds devices to setup...")
         self.devices[HubDeviceType.BLIND] = [ikea_blinds_device(hass, hub, b) for b in blinds]
         
         #Air Purifier

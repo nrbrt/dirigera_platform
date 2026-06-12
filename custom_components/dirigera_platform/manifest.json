@@ -15,7 +15,8 @@
     "custom_components.dirigera_platform"
   ],
   "requirements": [
-    "dirigera==1.2.6"
+    "dirigera==1.2.6",
+    "python-dateutil>=2.8"
   ],
   "version": "0.2.22"
 }

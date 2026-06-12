@@ -16,9 +16,8 @@ from .base_classes import (
     current_active_power_sensor,
     current_voltage_sensor,
     total_energy_consumed_sensor,
-    energy_consumed_at_last_reset_sensor ,
+    energy_consumed_at_last_reset_sensor,
     total_energy_consumed_last_updated_sensor,
-    total_energy_consumed_sensor,
     time_of_last_energy_reset_sensor
 )
 from .ikea_gateway import ikea_gateway
@@ -128,13 +127,22 @@ async def add_environment_sensors(async_add_entities, env_devices):
 async def add_outlet_power_attrs(async_add_entities, outlets):
     # Add sensors for the outlets
     power_entities = []
-    power_attrs=["current_amps","current_active_power","current_voltage","total_energy_consumed","energy_consumed_at_last_reset","time_of_last_energy_reset","total_energy_consumed_last_updated"]
+    # Explicit attr -> entity class map (used to be an eval on the attr name)
+    power_attr_sensors = {
+        "current_amps": current_amps_sensor,
+        "current_active_power": current_active_power_sensor,
+        "current_voltage": current_voltage_sensor,
+        "total_energy_consumed": total_energy_consumed_sensor,
+        "energy_consumed_at_last_reset": energy_consumed_at_last_reset_sensor,
+        "time_of_last_energy_reset": time_of_last_energy_reset_sensor,
+        "total_energy_consumed_last_updated": total_energy_consumed_last_updated_sensor,
+    }
     # Some outlets like INSPELNING Smart plug have ability to report power, so add those as well
     logger.debug("Looking for extra attributes of power/current/voltage in outlet....")
     for outlet in outlets:
-        for attr in power_attrs:
-            if hasattr(outlet._json_data.attributes, attr) and getattr(outlet._json_data.attributes, attr, None) is not None:
-                power_entities.append(eval(f"{attr}_sensor(outlet)"))
+        for attr, sensor_cls in power_attr_sensors.items():
+            if getattr(outlet._json_data.attributes, attr, None) is not None:
+                power_entities.append(sensor_cls(outlet))
 
     logger.debug(f"Found {len(power_entities)}, power attribute sensors for outlets")
     async_add_entities(power_entities)

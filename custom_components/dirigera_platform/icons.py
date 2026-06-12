@@ -94,7 +94,8 @@ def ikea_to_hass_icon(ikea_icon) -> str:
 
 def to_hass_icon(dirigera_icon: Icon) -> str:
     """Return suitable replacement icon."""
-    hass_icon: str = icon_mapping[dirigera_icon]
+    # .get: an unknown icon used to raise KeyError before the fallback below
+    hass_icon = icon_mapping.get(dirigera_icon)
     if hass_icon is None:
         logger.warning("Unknown icon %s", str(dirigera_icon))
         return "mdi:help"

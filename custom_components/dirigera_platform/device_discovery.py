@@ -228,7 +228,12 @@ class DeviceDiscoveryCoordinator:
                 # See issue #31.
                 outlet_id = device_data.get("id")
                 try:
-                    outlet = self._hub.get_outlet_by_id(outlet_id)
+                    # get_outlet_by_id() chains to a blocking requests call
+                    # (hub.get("/devices")); run it in the executor so we don't
+                    # block the event loop during runtime discovery. See issue #37.
+                    outlet = await self._hass.async_add_executor_job(
+                        self._hub.get_outlet_by_id, outlet_id
+                    )
                 except Exception as e:
                     logger.warning(
                         "get_outlet_by_id failed for runtime-discovered outlet "

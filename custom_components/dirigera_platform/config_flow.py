@@ -68,6 +68,11 @@ class dirigera_platform_config_flow(config_entries.ConfigFlow, domain=DOMAIN):
                 logger.debug("IP specified is blank...")
                 errors["base"] = "ip_not_specified"
             else:
+                # issue #39: prevent adding the same hub twice. Two config
+                # entries for one hub race on the shared device-gateway at
+                # startup, leaving entities missing non-deterministically.
+                await self.async_set_unique_id(self.ip)
+                self._abort_if_unique_id_configured()
                 try:
                     logger.debug("Moving to second step....")
                     if self.ip == "mock":

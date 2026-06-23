@@ -189,6 +189,11 @@ async def async_setup_entry(
         hass_data[CONF_HIDE_DEVICE_SET_BULBS] = hide_device_set_bulbs
 
     ip = hass_data[CONF_IP_ADDRESS]
+    # issue #39: back-fill unique_id on entries created before the duplicate
+    # guard, so a future duplicate add is rejected too. Already-duplicated
+    # entries remain (the user removes the extra one).
+    if entry.unique_id is None:
+        hass.config_entries.async_update_entry(entry, unique_id=ip)
     # Register the options-update listener exactly once; async_on_unload also
     # cleans it up when setup fails. It used to be registered twice (once
     # manually, once here), so every options save triggered two reloads.

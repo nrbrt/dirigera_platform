@@ -30,7 +30,7 @@ async def async_setup_entry(
     #TriggerDetails.update_forward_refs()
     #EndTriggerEvent.update_forward_refs()
 
-    async_add_entities(hass.data[DOMAIN][PLATFORM].scenes)
+    async_add_entities(hass.data[DOMAIN][entry.entry_id]["gateway"].scenes)
     logger.debug("async_setup_entry complete for scenes...")
 
 class ikea_scene(Scene):

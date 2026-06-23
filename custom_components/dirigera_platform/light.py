@@ -44,7 +44,7 @@ async def async_setup_entry(
 
     logger.debug(f"found setting hide_device_set_bulbs : {hide_device_set_bulbs}")
 
-    all_lights = hass.data[DOMAIN][PLATFORM].lights 
+    all_lights = hass.data[DOMAIN][config_entry.entry_id]["gateway"].lights
     logger.debug("Found {} total of all light entities to setup...".format(len(all_lights)))
         
     device_sets  = {}
@@ -81,7 +81,7 @@ async def async_setup_entry(
     async_add_entities(lights)
 
     # Register callback and known devices with discovery coordinator
-    discovery = hass.data[DOMAIN].get(DISCOVERY_COORDINATOR)
+    discovery = hass.data[DOMAIN][config_entry.entry_id].get("discovery")
     if discovery:
         discovery.register_platform_callback("light", async_add_entities)
         for light in all_lights:

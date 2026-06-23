@@ -16,7 +16,7 @@ async def async_setup_entry(
 ):
     logger.debug("SWITCH Starting async_setup_entry")
     """Setup sensors from a config entry created in the integrations UI."""
-    platform : ikea_gateway  = hass.data[DOMAIN][PLATFORM]
+    platform : ikea_gateway  = hass.data[DOMAIN][config_entry.entry_id]["gateway"]
     
     async_add_entities([ikea_outlet_switch_sensor(x) for x in platform.outlets])
     
@@ -46,7 +46,7 @@ async def async_setup_entry(
     async_add_entities(air_purifier_entities)
 
     # Register callback and known devices with discovery coordinator
-    discovery = hass.data[DOMAIN].get(DISCOVERY_COORDINATOR)
+    discovery = hass.data[DOMAIN][config_entry.entry_id].get("discovery")
     if discovery:
         discovery.register_platform_callback("switch", async_add_entities)
         for outlet in platform.outlets:

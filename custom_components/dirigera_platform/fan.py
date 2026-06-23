@@ -16,14 +16,14 @@ async def async_setup_entry(
     
     logger.debug("FAN/AirPurifier Starting async_setup_entry")
     
-    air_purifier_devices = hass.data[DOMAIN][PLATFORM].air_purifiers
+    air_purifier_devices = hass.data[DOMAIN][config_entry.entry_id]["gateway"].air_purifiers
     fan_sensors = [ikea_starkvind_air_purifier_fan(x) for x in air_purifier_devices]    
     logger.debug(f"Found {len(fan_sensors)} air purifier fan sensors to add...")
     
     async_add_entities(fan_sensors)
 
     # Register callback and known devices with discovery coordinator
-    discovery = hass.data[DOMAIN].get(DISCOVERY_COORDINATOR)
+    discovery = hass.data[DOMAIN][config_entry.entry_id].get("discovery")
     if discovery:
         discovery.register_platform_callback("fan", async_add_entities)
         for purifier in air_purifier_devices:

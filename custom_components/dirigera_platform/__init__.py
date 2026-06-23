@@ -206,7 +206,10 @@ async def async_setup_entry(
     # Lets get all kinds that we are interested in one go and create the devices
     # such that the platform can go ahead and add the associated sensors
     platform = ikea_gateway()
-    hass.data[DOMAIN][PLATFORM] = platform 
+    # issue #39: store the gateway per config entry, not in a shared global slot.
+    # A second hub entry used to clobber the first here, so one hub's devices
+    # vanished and the two entries collided on duplicate IDs (multi-hub support).
+    hass.data[DOMAIN][entry.entry_id]["gateway"] = platform
     logger.debug("Starting make_devices...")
     try:
         await platform.make_devices(hass,hass_data[CONF_IP_ADDRESS], hass_data[CONF_TOKEN])
@@ -220,8 +223,9 @@ async def async_setup_entry(
     # Initialize the discovery coordinator BEFORE platform setup
     # so platforms can register their callbacks during async_setup_entry
     discovery = DeviceDiscoveryCoordinator(hass, hub)
-    hass.data[DOMAIN][DISCOVERY_COORDINATOR] = discovery
-    set_discovery_coordinator(discovery)
+    # issue #39: per-entry discovery coordinator (was a shared global slot +
+    # module global that a second hub clobbered).
+    hass.data[DOMAIN][entry.entry_id]["discovery"] = discovery
     logger.debug("Device discovery coordinator initialized")
 
     # Setup the entities - each platform will register its callback with discovery coordinator

@@ -15,7 +15,7 @@ async def async_setup_entry(
     logger.debug("BLINDS Starting async_setup_entry")
     """Setup sensors from a config entry created in the integrations UI."""
     
-    devices = hass.data[DOMAIN][PLATFORM].blinds
+    devices = hass.data[DOMAIN][config_entry.entry_id]["gateway"].blinds
     
     blinds_sensors = [ikea_blinds_sensor(x) for x in devices]        
     logger.debug(f"Found {len(blinds_sensors)} blinds sensors to setup...")
@@ -23,7 +23,7 @@ async def async_setup_entry(
     async_add_entities(blinds_sensors)
 
     # Register callback and known devices with discovery coordinator
-    discovery = hass.data[DOMAIN].get(DISCOVERY_COORDINATOR)
+    discovery = hass.data[DOMAIN][config_entry.entry_id].get("discovery")
     if discovery:
         discovery.register_platform_callback("cover", async_add_entities)
         for blind in devices:

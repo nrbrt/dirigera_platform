@@ -45,7 +45,7 @@ async def async_setup_entry(
 
     hub = HubX(config[CONF_TOKEN], config[CONF_IP_ADDRESS])
 
-    platform: ikea_gateway = hass.data[DOMAIN][PLATFORM]
+    platform: ikea_gateway = hass.data[DOMAIN][config_entry.entry_id]["gateway"]
 
     # Precuationary delete all empty scenes
     if len(platform.empty_scenes) > 0:
@@ -85,7 +85,7 @@ async def async_setup_entry(
     await add_air_purifier_sensors(async_add_entities, platform.air_purifiers)
 
     # Register callback and known devices with discovery coordinator
-    discovery = hass.data[DOMAIN].get(DISCOVERY_COORDINATOR)
+    discovery = hass.data[DOMAIN][config_entry.entry_id].get("discovery")
     if discovery:
         discovery.register_platform_callback("sensor", async_add_entities)
         for sensor in platform.environment_sensors:

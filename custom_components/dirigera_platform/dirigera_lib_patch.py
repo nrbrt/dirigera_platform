@@ -18,6 +18,33 @@ class HubX(Hub):
         self, token: str, ip_address: str, port: str = "8443", api_version: str = "v1"
     ) -> None:
         super().__init__(token, ip_address, port, api_version)
+        # issue #38 punt 1: batch-cache voor /devices. Tijdens make_devices() roepen
+        # ~10 get_X-methoden elk self.get("/devices") aan -> 10x de volledige device-lijst
+        # over een verse TLS-handshake. Met een actieve batch fetcht alleen de eerste; de
+        # rest hergebruikt. Cache is UITSLUITEND actief binnen begin/end_devices_batch
+        # (alleen make_devices), dus runtime-calls (get_*_by_id, reload) halen verse data op.
+        self._devices_cache_active = False
+        self._devices_cache = None
+        self._devices_fetch_count = 0   # aantal échte /devices-fetches binnen de laatste batch
+
+    def get(self, route: str):
+        if route == "/devices" and self._devices_cache_active:
+            if self._devices_cache is None:
+                self._devices_fetch_count += 1
+                self._devices_cache = super().get(route)
+            return self._devices_cache
+        return super().get(route)
+
+    def begin_devices_batch(self) -> None:
+        """Start het coalescen van /devices-fetches (één fetch voor de hele make_devices-run)."""
+        self._devices_cache = None
+        self._devices_fetch_count = 0
+        self._devices_cache_active = True
+
+    def end_devices_batch(self) -> None:
+        """Stop coalescen en gooi de cache weg (runtime krijgt weer verse data)."""
+        self._devices_cache_active = False
+        self._devices_cache = None
 
     def get_controllers(self) -> List[ControllerX]:
         """

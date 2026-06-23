@@ -45,70 +45,82 @@ class ikea_gateway:
 
     async def make_devices(self, hass, ip, token):
         hub: HubX = HubX(token, ip)
-        
-        #Scenes
-        scenes = await hass.async_add_executor_job(hub.get_scenes)
-        logger.debug(f"Found {len(scenes)} scenes...")
-        empty_scenes = []
-        non_empty_scenes = []
-        for scene in scenes:
-            if scene.name.startswith("dirigera_integration_empty_scene_"):
-                empty_scenes.append(ikea_scene(hub,scene))
-            else:
-                non_empty_scenes.append(ikea_scene(hub,scene))
 
-        self.devices[HubDeviceType.EMPTY_SCENE] = empty_scenes        
-        self.devices[HubDeviceType.SCENE] = non_empty_scenes
+        # issue #38 punt 1+4: coalesce de ~10 /devices-fetches van de get_X-calls hieronder
+        # tot één enkele fetch. try/finally garandeert dat de cache-vlag áltijd reset —
+        # de hub-instance blijft leven in de entities en mag runtime geen stale cache houden.
+        hub.begin_devices_batch()
+        try:
+            #Scenes
+            scenes = await hass.async_add_executor_job(hub.get_scenes)
+            logger.debug(f"Found {len(scenes)} scenes...")
+            empty_scenes = []
+            non_empty_scenes = []
+            for scene in scenes:
+                if scene.name.startswith("dirigera_integration_empty_scene_"):
+                    empty_scenes.append(ikea_scene(hub,scene))
+                else:
+                    non_empty_scenes.append(ikea_scene(hub,scene))
 
-        #Light
-        lights = await hass.async_add_executor_job(hub.get_lights)
-        logger.debug(f"Found {len(lights)} total of all light devices to setup...")
-        self.devices[HubDeviceType.LIGHT] = [ikea_bulb(hub, light) for light in lights]
-        
-        #Cover
-        blinds = await hass.async_add_executor_job(hub.get_blinds)
-        logger.debug(f"Found {len(blinds)} total of all blinds devices to setup...")
-        self.devices[HubDeviceType.BLIND] = [ikea_blinds_device(hass, hub, b) for b in blinds]
-        
-        #Air Purifier
-        air_purifiers = await hass.async_add_executor_job(hub.get_air_purifiers)
-        logger.debug(f"Found {len(air_purifiers)} total of all air purifiers devices to setup...")
-        self.devices[HubDeviceType.AIR_PURIFIER] = [ikea_starkvind_air_purifier_device(hass, hub, a) for a in air_purifiers]
+            self.devices[HubDeviceType.EMPTY_SCENE] = empty_scenes
+            self.devices[HubDeviceType.SCENE] = non_empty_scenes
 
-        #Outlets
-        outlets = await hass.async_add_executor_job(hub.get_outlets)
-        logger.debug(f"Found {len(outlets)} total of all outlets devices to setup...")
-        self.devices[HubDeviceType.OUTLET] = [ ikea_outlet_device(hass, hub, x) for x in outlets ]
-        
-        #Environment Sensor
-        environment_sensors = await hass.async_add_executor_job(hub.get_environment_sensors)
-        logger.debug(f"Found {len(environment_sensors)} total of all environment devices entities to setup...")
-        self.devices[HubDeviceType.ENVIRONMENT_SENSOR] = [ikea_vindstyrka_device(hass, hub, env_device) for env_device in environment_sensors]
+            #Light
+            lights = await hass.async_add_executor_job(hub.get_lights)
+            logger.debug(f"Found {len(lights)} total of all light devices to setup...")
+            self.devices[HubDeviceType.LIGHT] = [ikea_bulb(hub, light) for light in lights]
 
-        #Controllers
-        controllers = await hass.async_add_executor_job(hub.get_controllers)
-        logger.debug(f"Found {len(controllers)} total of all controllers devices to setup...")
-        self.devices[HubDeviceType.CONTROLLER] = [ikea_controller_device(hass, hub, x) for x in controllers]
-        
-        #Open Close Sensors
-        open_close_sensors = await hass.async_add_executor_job(hub.get_open_close_sensors)
-        logger.debug(f"Found {len(open_close_sensors)} total of all open_close devices to setup...")
-        self.devices[HubDeviceType.OPEN_CLOSE_SENSOR] = [ikea_open_close_device(hass, hub, x) for x in open_close_sensors]
-        
-        #Motion Sensors
-        motion_sensors = await hass.async_add_executor_job(hub.get_motion_sensors)
-        logger.debug(f"Found {len(motion_sensors)} total of all motion_sensors devices to setup...")
-        self.devices[HubDeviceType.MOTION_SENSOR] = [ikea_motion_sensor_device(hass, hub, x) for x in motion_sensors]
-        
-        #Light Sensors (MYGGSPRAY illuminance)
-        light_sensors = await hass.async_add_executor_job(hub.get_light_sensors)
-        logger.debug(f"Found {len(light_sensors)} total of all light_sensors devices to setup...")
-        self.devices[HubDeviceType.LIGHT_SENSOR] = [ikea_light_sensor_device(hass, hub, x) for x in light_sensors]
+            #Cover
+            blinds = await hass.async_add_executor_job(hub.get_blinds)
+            logger.debug(f"Found {len(blinds)} total of all blinds devices to setup...")
+            self.devices[HubDeviceType.BLIND] = [ikea_blinds_device(hass, hub, b) for b in blinds]
 
-        #Water Sensors
-        water_sensors = await hass.async_add_executor_job(hub.get_water_sensors)
-        logger.debug(f"Found {len(water_sensors)} total of all water_sensors devices to setup...")
-        self.devices[HubDeviceType.WATER_SENSOR] = [ikea_water_sensor_device(hass, hub, x) for x in water_sensors]
+            #Air Purifier
+            air_purifiers = await hass.async_add_executor_job(hub.get_air_purifiers)
+            logger.debug(f"Found {len(air_purifiers)} total of all air purifiers devices to setup...")
+            self.devices[HubDeviceType.AIR_PURIFIER] = [ikea_starkvind_air_purifier_device(hass, hub, a) for a in air_purifiers]
+
+            #Outlets
+            outlets = await hass.async_add_executor_job(hub.get_outlets)
+            logger.debug(f"Found {len(outlets)} total of all outlets devices to setup...")
+            self.devices[HubDeviceType.OUTLET] = [ ikea_outlet_device(hass, hub, x) for x in outlets ]
+
+            #Environment Sensor
+            environment_sensors = await hass.async_add_executor_job(hub.get_environment_sensors)
+            logger.debug(f"Found {len(environment_sensors)} total of all environment devices entities to setup...")
+            self.devices[HubDeviceType.ENVIRONMENT_SENSOR] = [ikea_vindstyrka_device(hass, hub, env_device) for env_device in environment_sensors]
+
+            #Controllers
+            controllers = await hass.async_add_executor_job(hub.get_controllers)
+            logger.debug(f"Found {len(controllers)} total of all controllers devices to setup...")
+            self.devices[HubDeviceType.CONTROLLER] = [ikea_controller_device(hass, hub, x) for x in controllers]
+
+            #Open Close Sensors
+            open_close_sensors = await hass.async_add_executor_job(hub.get_open_close_sensors)
+            logger.debug(f"Found {len(open_close_sensors)} total of all open_close devices to setup...")
+            self.devices[HubDeviceType.OPEN_CLOSE_SENSOR] = [ikea_open_close_device(hass, hub, x) for x in open_close_sensors]
+
+            #Motion Sensors
+            motion_sensors = await hass.async_add_executor_job(hub.get_motion_sensors)
+            logger.debug(f"Found {len(motion_sensors)} total of all motion_sensors devices to setup...")
+            self.devices[HubDeviceType.MOTION_SENSOR] = [ikea_motion_sensor_device(hass, hub, x) for x in motion_sensors]
+
+            #Light Sensors (MYGGSPRAY illuminance)
+            light_sensors = await hass.async_add_executor_job(hub.get_light_sensors)
+            logger.debug(f"Found {len(light_sensors)} total of all light_sensors devices to setup...")
+            self.devices[HubDeviceType.LIGHT_SENSOR] = [ikea_light_sensor_device(hass, hub, x) for x in light_sensors]
+
+            #Water Sensors
+            water_sensors = await hass.async_add_executor_job(hub.get_water_sensors)
+            logger.debug(f"Found {len(water_sensors)} total of all water_sensors devices to setup...")
+            self.devices[HubDeviceType.WATER_SENSOR] = [ikea_water_sensor_device(hass, hub, x) for x in water_sensors]
+
+            logger.info(
+                "make_devices: coalesced all device-type lookups into %d /devices fetch(es) [issue #38 #1]",
+                hub._devices_fetch_count,
+            )
+        finally:
+            hub.end_devices_batch()
 
     def get_devices(self, key):
         if key not in self.devices:

@@ -48,6 +48,11 @@ class DeviceDiscoveryCoordinator:
         self._platform_callbacks: Dict[str, Callable] = {}
         self._known_device_ids: set = set()
         self._pending_discovery: set = set()  # Devices currently being discovered
+        # Devices whose entity creation returned None (unsupported device type /
+        # runtime discovery not implemented). Cached so a chatty device -- e.g. an
+        # environmentSensor _2 sub-channel that has no parent to route to -- does
+        # not re-trigger a blocking /devices fetch on every event. See issue #39.
+        self._unsupported_device_ids: set = set()
 
     def register_platform_callback(self, platform: str, callback: Callable) -> None:
         """
@@ -105,6 +110,10 @@ class DeviceDiscoveryCoordinator:
             logger.debug(f"Device {device_id} already known, skipping discovery")
             return False
 
+        if device_id in self._unsupported_device_ids:
+            logger.debug(f"Device {device_id} previously unsupported, skipping re-discovery")
+            return False
+
         self._pending_discovery.add(device_id)
 
         try:
@@ -135,6 +144,11 @@ class DeviceDiscoveryCoordinator:
             # Create the entity based on device type
             entity = await self._create_entity(device_type, device_data)
             if entity is None:
+                # No entity could be built (e.g. a device type whose runtime
+                # discovery is not implemented). Remember it so subsequent events
+                # for the same device short-circuit instead of re-fetching from
+                # the hub on every event. See issue #39.
+                self._unsupported_device_ids.add(device_id)
                 logger.error(f"Failed to create entity for device {device_id}")
                 return False
 

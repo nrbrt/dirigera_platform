@@ -4,7 +4,7 @@
 [![Version](https://img.shields.io/github/v/release/nrbrt/dirigera_platform)](https://github.com/nrbrt/dirigera_platform/releases)
 
 
-A Home Assistant integration for the IKEA Dirigera hub, built on the [dirigera](https://github.com/Leggin/dirigera) Python library (v1.2.6). Originally forked from [sanjoyg/dirigera_platform](https://github.com/sanjoyg/dirigera_platform) and now under **active development**, with a strong focus on reliability — application-level WebSocket keepalive, automatic state re-sync on reconnect, and dynamic device discovery — alongside broad device support and regular fixes. The most recent work lands in the [changelog](#changelog) below; issues are actively triaged.
+A Home Assistant integration for the IKEA Dirigera hub, built on the [dirigera](https://github.com/Leggin/dirigera) Python library (v1.2.6). Originally forked from [sanjoyg/dirigera_platform](https://github.com/sanjoyg/dirigera_platform) and now under **active development**, with a strong focus on reliability : application-level WebSocket keepalive, automatic state re-sync on reconnect, and dynamic device discovery. Alongside broad device support and regular fixes. The most recent work lands in the [changelog](#changelog) below; issues are actively triaged.
 
 Contributions are welcome, feel free to open [issues](https://github.com/nrbrt/dirigera_platform/issues) or submit pull requests. Device data dumps are especially helpful for adding support for new devices ([how to dump](docs/dump-data.md)).
 

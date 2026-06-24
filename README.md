@@ -86,7 +86,7 @@ To test with mock devices, enter `mock` as the IP address.
 
 ## Bug Reports & Feature Requests
 
-When opening an issue, please include a device data dump — it helps enormously:
+When opening an issue, please include a device data dump, it helps enormously:
 
 1. Go to **Developer Tools** → **Services**
 2. Call `dirigera_platform.dump_data` (no parameters needed)

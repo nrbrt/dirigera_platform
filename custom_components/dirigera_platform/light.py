@@ -126,7 +126,7 @@ class ikea_bulb(LightEntity):
         self._ignore_update = False 
 
         # Register the device for updates
-        hub_event_listener.register(self._json_data.id, registry_entry(self))
+        hub_event_listener.register(self._hub.websocket_base_url, self._json_data.id, registry_entry(self))
 
         self.set_state()
 
@@ -387,7 +387,7 @@ class ikea_bulb_device_set(LightEntity):
         self._patch_url = f"/devices/set/{device_set.id}?deviceType=light"    
 
         # Update cascade entity
-        registry_entry_of_bulb = hub_event_listener.get_registry_entry(first_bulb.unique_id)
+        registry_entry_of_bulb = hub_event_listener.get_registry_entry(self._hub.websocket_base_url, first_bulb.unique_id)
         registry_entry_of_bulb.cascade_entity = self
 
     @property
@@ -406,8 +406,8 @@ class ikea_bulb_device_set(LightEntity):
     def device_info(self) -> DeviceInfo:
 
         # Register the device for updates
-        hub_event_listener.register(self.unique_id, registry_entry(self))
-        
+        hub_event_listener.register(self._hub.websocket_base_url, self.unique_id, registry_entry(self))
+
         return DeviceInfo(
             identifiers={("dirigera_platform", self._device_set.id)},
             name=self._device_set.name ,

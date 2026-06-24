@@ -71,7 +71,7 @@ class ikea_base_device:
         
         # Register the device for updates
         if self.should_register_with_listener:
-            hub_event_listener.register(self._json_data.id, registry_entry(self))
+            hub_event_listener.register(self._hub.websocket_base_url, self._json_data.id, registry_entry(self))
 
     @property
     def skip_update(self)->bool:
@@ -112,7 +112,7 @@ class ikea_base_device:
         if self._json_data.relation_id:
             # Collect all custom_names for this relation_id from registered entities
             names = []
-            for reg_entry in hub_event_listener.device_registry.values():
+            for reg_entry in hub_event_listener.device_registry.get(self._hub.websocket_base_url, {}).values():
                 sibling = reg_entry.entity
                 if (hasattr(sibling, '_json_data')
                         and sibling._json_data.relation_id == self._json_data.relation_id
@@ -143,7 +143,7 @@ class ikea_base_device:
         # "primary" device (e.g. occupancySensor), not the secondary (lightSensor).
         # Without this, the secondary keeps its factory default name.
         if self._json_data.relation_id:
-            for reg_entry in hub_event_listener.device_registry.values():
+            for reg_entry in hub_event_listener.device_registry.get(self._hub.websocket_base_url, {}).values():
                 sibling = reg_entry.entity
                 if (hasattr(sibling, '_json_data')
                         and sibling._json_data.relation_id == self._json_data.relation_id

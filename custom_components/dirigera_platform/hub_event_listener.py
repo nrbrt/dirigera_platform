@@ -84,17 +84,35 @@ class registry_entry:
         return str
 
 class hub_event_listener(threading.Thread):
+    # Per-hub device registries: {hub_key: {device_id: registry_entry}}.
+    # hub_key is the hub's websocket_base_url, which a hub's entities and its
+    # listener share (both are built from the same config-entry IP). Keeping a
+    # registry per hub means stopping or unloading one hub no longer wipes
+    # another hub's device registrations. See issue #39.
     device_registry = {}
 
-    def register(id: str, entry: registry_entry):
-        if id in hub_event_listener.device_registry:
-            return 
-        hub_event_listener.device_registry[id] = entry 
+    def register(hub_key: str, id: str, entry: registry_entry):
+        bucket = hub_event_listener.device_registry.setdefault(hub_key, {})
+        if id in bucket:
+            return
+        bucket[id] = entry
 
-    def get_registry_entry(id:str) -> registry_entry:
-        if id not in hub_event_listener.device_registry:
-            return None 
-        return hub_event_listener.device_registry[id]
+    def get_registry_entry(hub_key: str, id: str) -> registry_entry:
+        return hub_event_listener.device_registry.get(hub_key, {}).get(id)
+
+    def unregister_hub(hub_key: str):
+        hub_event_listener.device_registry.pop(hub_key, None)
+
+    def find_registry_entry(id: str) -> registry_entry:
+        # Hub-agnostic lookup for callers without a hub reference (e.g. device
+        # triggers). Device ids are unique across hubs, so the first match wins.
+        for bucket in hub_event_listener.device_registry.values():
+            if id in bucket:
+                return bucket[id]
+        return None
+
+    def _own_registry(self) -> dict:
+        return hub_event_listener.device_registry.get(self._hub_key, {})
     
     # Dirigera hubs disconnect WebSocket clients after ~60 minutes of
     # "inactivity". Crucially, the hub does NOT count WebSocket protocol-level
@@ -110,6 +128,9 @@ class hub_event_listener(threading.Thread):
     def __init__(self, hub : Hub, hass, discovery_coordinator=None):
         super().__init__()
         self._hub : Hub = hub
+        # Key into the per-hub device registry. Entities of this hub register
+        # under the same key (their hub shares this websocket_base_url). See #39.
+        self._hub_key = getattr(hub, "websocket_base_url", None)
         self._request_to_stop = False
         self._stop_event = threading.Event()
         self._hass = hass
@@ -204,10 +225,10 @@ class hub_event_listener(threading.Thread):
         This should be called at startup after all entities are registered,
         to ensure HA device names match Dirigera names (set via IKEA app).
         """
-        logger.info("Starting device name sync from Dirigera (%d registry entries)", len(hub_event_listener.device_registry))
+        logger.info("Starting device name sync from Dirigera (%d registry entries)", len(self._own_registry()))
         synced_count = 0
         seen_identifiers = set()
-        for device_id, registry_entry in hub_event_listener.device_registry.items():
+        for device_id, registry_entry in self._own_registry().items():
             try:
                 entity = registry_entry.entity
                 if not hasattr(entity, '_json_data'):
@@ -238,7 +259,7 @@ class hub_event_listener(threading.Thread):
         """
         logger.info("Starting device area sync from Dirigera rooms")
         synced_count = 0
-        for device_id, registry_entry in hub_event_listener.device_registry.items():
+        for device_id, registry_entry in self._own_registry().items():
             try:
                 entity = registry_entry.entity
                 if not hasattr(entity, '_json_data'):
@@ -319,7 +340,7 @@ class hub_event_listener(threading.Thread):
                 trigger_type =f"button{button_idx}_{trigger_type}"
             
             # Now look up the associated entity in our own registry
-            registry_value = hub_event_listener.get_registry_entry(device_id_for_registry)
+            registry_value = hub_event_listener.get_registry_entry(self._hub_key, device_id_for_registry)
             
             if registry_value.__class__.__name__ != "registry_entry":
                 logger.debug(f"id : {device_id_for_registry} listener registry is not correct : {registry_value.__class__.__name__}...")
@@ -383,11 +404,11 @@ class hub_event_listener(threading.Thread):
             if not device_id or not attributes:
                 continue
 
-            if device_id not in hub_event_listener.device_registry:
+            if device_id not in self._own_registry():
                 logger.debug(f"Scene action device {device_id} not in registry, skipping")
                 continue
 
-            registry_value = hub_event_listener.get_registry_entry(device_id)
+            registry_value = hub_event_listener.get_registry_entry(self._hub_key, device_id)
             if registry_value.__class__.__name__ != "registry_entry":
                 continue
 
@@ -472,7 +493,7 @@ class hub_event_listener(threading.Thread):
             trigger_type = f"button{button_idx}_{trigger_type}"
 
         # Look up entity in registry
-        registry_value = hub_event_listener.get_registry_entry(device_id_for_registry)
+        registry_value = hub_event_listener.get_registry_entry(self._hub_key, device_id_for_registry)
 
         if registry_value is None:
             logger.debug(f"remotePressEvent: Controller {device_id_for_registry} not found in registry, ignoring...")
@@ -574,14 +595,14 @@ class hub_event_listener(threading.Thread):
                 # then best to not process this event
                 return
 
-            if id not in hub_event_listener.device_registry:
+            if id not in self._own_registry():
                 # Split-device routing: try to find parent entity for unregistered devices
                 routed = False
 
                 # For electricalSensor events (GRILLPLATS/TOFSMYGGA _2 -> _1)
                 if device_type == "electricalSensor" and id.endswith("_2"):
                     outlet_id = id[:-2] + "_1"
-                    if outlet_id in hub_event_listener.device_registry:
+                    if outlet_id in self._own_registry():
                         logger.debug(f"Routing electricalSensor {id} events to outlet {outlet_id}")
                         id = outlet_id
                         routed = True
@@ -592,14 +613,14 @@ class hub_event_listener(threading.Thread):
                     # Try _1/_2 suffix pattern
                     if id.endswith("_2"):
                         sibling_id = id[:-2] + "_1"
-                        if sibling_id in hub_event_listener.device_registry:
+                        if sibling_id in self._own_registry():
                             logger.debug(f"Routing environmentSensor {id} events to sibling {sibling_id}")
                             id = sibling_id
                             routed = True
                     # Try finding any registered device sharing the same base ID (relationId)
                     if not routed:
                         base_id = id.rsplit("_", 1)[0] if "_" in id else id
-                        for reg_id in hub_event_listener.device_registry:
+                        for reg_id in self._own_registry():
                             if reg_id.startswith(base_id) and reg_id != id:
                                 logger.debug(f"Routing environmentSensor {id} events to related {reg_id}")
                                 id = reg_id
@@ -625,7 +646,7 @@ class hub_event_listener(threading.Thread):
                         logger.info(f"discarding message as device for id: {id} not found for msg: {msg}")
                     return
 
-            registry_value = hub_event_listener.get_registry_entry(id)
+            registry_value = hub_event_listener.get_registry_entry(self._hub_key, id)
             entity = registry_value.entity
 
             reachability_changed = False
@@ -901,7 +922,7 @@ class hub_event_listener(threading.Thread):
         except:
             pass
         self.join()
-        hub_event_listener.device_registry.clear()
+        hub_event_listener.unregister_hub(self._hub_key)
         logger.info("Listener stopped..")
 
     def run(self):

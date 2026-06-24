@@ -33,7 +33,7 @@ async def async_get_triggers(hass: HomeAssistant, device_id: str) -> list[dict[s
         entity_id = entity_entry.unique_id
         entity_name = entity_entry.entity_id
         
-        registry_entry = hub_event_listener.get_registry_entry(entity_id)
+        registry_entry = hub_event_listener.find_registry_entry(entity_id)
         if registry_entry is None:
             logger.warning(f"entity_id: {entity_id}, not found in dirigera_platform registry. Not associating triggers")
             continue

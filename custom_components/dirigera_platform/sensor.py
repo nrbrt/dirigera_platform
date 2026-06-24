@@ -235,7 +235,7 @@ async def add_controllers_sensors(hass, async_add_entities, hub, controllers):
         for other in group:
             if other is primary:
                 continue
-            hub_event_listener.device_registry[other._json_data.id] = registry_entry(primary)
+            hub_event_listener.device_registry.setdefault(primary._hub.websocket_base_url, {})[other._json_data.id] = registry_entry(primary)
 
     logger.debug("Found {} controller devices to setup...".format(len(controller_entities)))
     async_add_entities(controller_entities)

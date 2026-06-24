@@ -118,6 +118,12 @@ class hub_event_listener(threading.Thread):
         self._wsapp = None
         self._session_started_at = None
         self._keepalive_timer = None
+        # True while a post-reconnect state resync is replaying /devices, so the
+        # event path skips discovery for unknown devices (issue #39).
+        self._resyncing = False
+        # False until the first WebSocket open; used to tell an initial connect
+        # (setup already fetched state) from a reconnect (must re-pull state).
+        self._has_opened = False
 
     async def _update_device_area(self, device_id: str, room_name: str):
         """Update the device's area in Home Assistant's device registry if needed."""
@@ -601,6 +607,12 @@ class hub_event_listener(threading.Thread):
                                 break
 
                 if not routed:
+                    # During a reconnect resync we replay every device, so an
+                    # unknown id here is just a device with no entity — skip it
+                    # silently rather than firing discovery for it on every
+                    # reconnect. See issue #39.
+                    if self._resyncing:
+                        return
                     # Unknown device - try to discover it
                     if self._discovery_coordinator is not None:
                         logger.info(f"Unknown device detected: {id} (type: {device_type}), triggering discovery")
@@ -811,6 +823,45 @@ class hub_event_listener(threading.Thread):
         self._session_started_at = time.time()
         logger.info("Dirigera WebSocket opened")
         self._start_keepalive()
+        # On a *reconnect* (not the first open), the hub only delivers state
+        # changes going forward — anything that changed while we were
+        # disconnected is never replayed. Dirigera hubs drop the WebSocket
+        # fairly often (every few minutes on some setups), so without this
+        # entities silently accumulate stale state until they happen to change
+        # again. Re-pull all device state on reconnect. See issue #39.
+        if self._has_opened:
+            logger.info("WebSocket reconnected — scheduling device state resync")
+            self._loop.call_soon_threadsafe(
+                lambda: self._hass.async_create_task(self._resync_all_states())
+            )
+        self._has_opened = True
+
+    async def _resync_all_states(self):
+        """Re-pull current state for all devices after a reconnect and replay
+        it through the normal event path, so changes missed during the
+        disconnect gap are caught up. One /devices fetch (no per-device
+        hammering); discovery is suppressed during the replay. See issue #39."""
+        try:
+            devices = await self._hass.async_add_executor_job(self._hub.get, "/devices")
+        except Exception as ex:
+            logger.warning(f"State resync failed to fetch /devices: {ex}")
+            return
+        if not devices:
+            return
+        self._resyncing = True
+        try:
+            for device in devices:
+                try:
+                    self.on_message(
+                        None, json.dumps({"type": "deviceStateChanged", "data": device})
+                    )
+                except Exception as ex:
+                    logger.debug(
+                        f"resync: failed to apply state for {device.get('id')}: {ex}"
+                    )
+            logger.info(f"State resync applied for {len(devices)} devices after reconnect")
+        finally:
+            self._resyncing = False
 
     def create_listener(self):
         try:

@@ -6,15 +6,15 @@
 
 A Home Assistant integration for the IKEA Dirigera hub, built on the [dirigera](https://github.com/Leggin/dirigera) Python library (v1.2.6). Originally forked from [sanjoyg/dirigera_platform](https://github.com/sanjoyg/dirigera_platform) and now under **active development**, with a strong focus on reliability — application-level WebSocket keepalive, automatic state re-sync on reconnect, and dynamic device discovery — alongside broad device support and regular fixes. The most recent work lands in the [changelog](#changelog) below; issues are actively triaged.
 
-Contributions are welcome — feel free to open [issues](https://github.com/nrbrt/dirigera_platform/issues) or submit pull requests. Device data dumps are especially helpful for adding support for new devices ([how to dump](docs/dump-data.md)).
+Contributions are welcome, feel free to open [issues](https://github.com/nrbrt/dirigera_platform/issues) or submit pull requests. Device data dumps are especially helpful for adding support for new devices ([how to dump](docs/dump-data.md)).
 
 ## Highlights
 
-- **Dynamic Device Discovery** — devices added, removed, renamed, or moved to a different room in the IKEA Home app are automatically reflected in Home Assistant without a restart
-- **Split-Device Merging** — newer IKEA devices (GRILLPLATS, TOFSMYGGA, TIMMERFLOTTE, MYGGSPRAY) expose as multiple API devices linked by `relationId`; the integration automatically merges them into single HA entities
-- **Real-Time Updates** — full WebSocket event support for instant state changes across all device types
-- **Resilient Connection** — application-level WebSocket keepalive reduces hub "inactivity" disconnects, and all device state is automatically re-synced on every reconnect, so entities never silently go stale after the hub drops the connection
-- **Reliable Startup** — automatic retry on connection failure (`ConfigEntryNotReady`) instead of requiring manual reloads
+- **Dynamic Device Discovery** : devices added, removed, renamed, or moved to a different room in the IKEA Home app are automatically reflected in Home Assistant without a restart
+- **Split-Device Merging** : newer IKEA devices (GRILLPLATS, TOFSMYGGA, TIMMERFLOTTE, MYGGSPRAY) expose as multiple API devices linked by `relationId`; the integration automatically merges them into single HA entities
+- **Real-Time Updates** : full WebSocket event support for instant state changes across all device types
+- **Resilient Connection** : application-level WebSocket keepalive reduces hub "inactivity" disconnects, and all device state is automatically re-synced on every reconnect, so entities never silently go stale after the hub drops the connection
+- **Reliable Startup** : automatic retry on connection failure (`ConfigEntryNotReady`) instead of requiring manual reloads
 
 ## Upstream issues addressed in this fork
 

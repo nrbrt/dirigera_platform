@@ -15,6 +15,7 @@ Contributions are welcome, feel free to open [issues](https://github.com/nrbrt/d
 - **Real-Time Updates** : full WebSocket event support for instant state changes across all device types
 - **Resilient Connection** : application-level WebSocket keepalive reduces hub "inactivity" disconnects, and all device state is automatically re-synced on every reconnect, so entities never silently go stale after the hub drops the connection
 - **Reliable Startup** : automatic retry on connection failure (`ConfigEntryNotReady`) instead of requiring manual reloads
+- **Multiple Hubs** : run more than one Dirigera hub side by side. Add the integration once per hub; each hub keeps its own device registry and event connection, so reloading one never disturbs another
 
 ## Upstream issues addressed in this fork
 

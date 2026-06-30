@@ -217,11 +217,23 @@ class ikea_base_device:
     # To ensure state update of hass is cascaded
     def async_schedule_update_ha_state(self, force_refresh:bool = False) -> None:
         for listener in self._listeners:
+            # A listener registered via add_listener but never added to HA
+            # (async_add_entities not called for it) has hass=None; HA's
+            # schedule_update_ha_state then dereferences self.hass.loop and
+            # raises AttributeError, surfacing as a flood of "error processing
+            # hub event" warnings (#41). Skipping it is behaviour-neutral: an
+            # entity not registered with HA cannot receive a state push anyway.
+            if listener.hass is None:
+                continue
             listener.schedule_update_ha_state(force_refresh)
 
     # To ensure state update of hass is cascaded
     def schedule_update_ha_state(self, force_refresh:bool = False) -> None:
         for listener in self._listeners:
+            # See async_schedule_update_ha_state: a listener with hass=None
+            # would raise AttributeError in HA's schedule_update_ha_state (#41).
+            if listener.hass is None:
+                continue
             listener.schedule_update_ha_state(force_refresh)
 
 class ikea_base_device_sensor():

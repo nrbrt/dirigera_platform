@@ -31,7 +31,7 @@ from dirigera.devices.controller import Controller
 from dirigera.devices.air_purifier import FanModeEnum
 
 from .hub_event_listener import hub_event_listener, registry_entry
-from .const import DOMAIN
+from .const import DOMAIN, DEFAULT_POWER_PUSH_THROTTLE
 
 from enum import Enum
 import asyncio
@@ -225,6 +225,8 @@ class ikea_base_device:
             # entity not registered with HA cannot receive a state push anyway.
             if listener.hass is None:
                 continue
+            if self._push_throttled(listener, force_refresh):
+                continue
             listener.schedule_update_ha_state(force_refresh)
 
     # To ensure state update of hass is cascaded
@@ -234,7 +236,28 @@ class ikea_base_device:
             # would raise AttributeError in HA's schedule_update_ha_state (#41).
             if listener.hass is None:
                 continue
+            if self._push_throttled(listener, force_refresh):
+                continue
             listener.schedule_update_ha_state(force_refresh)
+
+    @staticmethod
+    def _push_throttled(listener, force_refresh: bool) -> bool:
+        # Per-listener push throttle (#40): high-frequency sensors (power/amps/
+        # voltage) opt into a minimum interval between HA state pushes to spare
+        # the recorder. The device's internal data was already updated before
+        # this fan-out, so the sensor's native_value keeps returning the live
+        # value; only the HA notification (and its recorder write) is skipped.
+        # A forced refresh is never throttled (it is an explicit request).
+        if force_refresh:
+            return False
+        throttle = getattr(listener, "_ha_push_throttle_seconds", 0)
+        if throttle <= 0:
+            return False
+        now = time.monotonic()
+        if now - getattr(listener, "_ha_last_push_at", 0.0) < throttle:
+            return True
+        listener._ha_last_push_at = now
+        return False
 
 class ikea_base_device_sensor():
     _attr_has_entity_name = True
@@ -937,6 +960,10 @@ class battery_percentage_sensor(ikea_base_device_sensor, SensorEntity):
         return getattr(self._device, "battery_percentage")
     
 class current_amps_sensor(ikea_base_device_sensor, SensorEntity):
+    # Rate-limit HA state pushes to spare the recorder (#40). Default from
+    # const; overridden per-instance from the integration options at setup.
+    _ha_push_throttle_seconds: int = DEFAULT_POWER_PUSH_THROTTLE
+
     def __init__(self, device):
         super().__init__(
                             device = device, 
@@ -958,6 +985,10 @@ class current_amps_sensor(ikea_base_device_sensor, SensorEntity):
         return getattr(self._device, "current_amps")
 
 class current_active_power_sensor(ikea_base_device_sensor, SensorEntity):
+    # Rate-limit HA state pushes to spare the recorder (#40). Default from
+    # const; overridden per-instance from the integration options at setup.
+    _ha_push_throttle_seconds: int = DEFAULT_POWER_PUSH_THROTTLE
+
     def __init__(self, device):
         super().__init__(
                             device = device, 
@@ -977,6 +1008,10 @@ class current_active_power_sensor(ikea_base_device_sensor, SensorEntity):
         return getattr(self._device, "current_active_power")
     
 class current_voltage_sensor(ikea_base_device_sensor, SensorEntity):
+    # Rate-limit HA state pushes to spare the recorder (#40). Voltage moves
+    # slowly so its impact is lower, but it rides the same ~8s WebSocket push.
+    # Default from const; overridden per-instance from the options at setup.
+    _ha_push_throttle_seconds: int = DEFAULT_POWER_PUSH_THROTTLE
     
     def __init__(self, device):
         super().__init__(

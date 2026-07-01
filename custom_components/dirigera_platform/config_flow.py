@@ -11,13 +11,19 @@ from homeassistant.const import CONF_IP_ADDRESS, CONF_TOKEN
 from homeassistant.core import callback
 import homeassistant.helpers.config_validation as cv
 
-from .const import DOMAIN, CONF_HIDE_DEVICE_SET_BULBS
+from .const import (
+    DOMAIN,
+    CONF_HIDE_DEVICE_SET_BULBS,
+    CONF_POWER_PUSH_THROTTLE,
+    DEFAULT_POWER_PUSH_THROTTLE,
+)
 
 logger = logging.getLogger("custom_components.dirigera_platform")
 
 HUB_SCHEMA = vol.Schema({
-    vol.Required(CONF_IP_ADDRESS): cv.string, 
-    vol.Optional(CONF_HIDE_DEVICE_SET_BULBS, default=True): cv.boolean
+    vol.Required(CONF_IP_ADDRESS): cv.string,
+    vol.Optional(CONF_HIDE_DEVICE_SET_BULBS, default=True): cv.boolean,
+    vol.Optional(CONF_POWER_PUSH_THROTTLE, default=DEFAULT_POWER_PUSH_THROTTLE): vol.All(vol.Coerce(int), vol.Range(min=0))
     })
 
 NULL_SCHEMA = vol.Schema({})
@@ -46,7 +52,8 @@ class dirigera_platform_config_flow(config_entries.ConfigFlow, domain=DOMAIN):
     def __init__(self):
         self.ip = None
         self.code = None
-        self.hide_device_set_bulbs = True 
+        self.hide_device_set_bulbs = True
+        self.power_push_throttle = DEFAULT_POWER_PUSH_THROTTLE
         self.code_verifier = None
 
     async def async_step_user(
@@ -63,6 +70,7 @@ class dirigera_platform_config_flow(config_entries.ConfigFlow, domain=DOMAIN):
 
             self.ip = user_input[CONF_IP_ADDRESS]
             self.hide_device_set_bulbs = user_input[CONF_HIDE_DEVICE_SET_BULBS]
+            self.power_push_throttle = user_input.get(CONF_POWER_PUSH_THROTTLE, DEFAULT_POWER_PUSH_THROTTLE)
 
             if self.ip is None or len(self.ip.strip()) == 0:
                 logger.debug("IP specified is blank...")
@@ -121,6 +129,7 @@ class dirigera_platform_config_flow(config_entries.ConfigFlow, domain=DOMAIN):
             user_input[CONF_IP_ADDRESS] = self.ip
             user_input[CONF_TOKEN] = token
             user_input[CONF_HIDE_DEVICE_SET_BULBS] = self.hide_device_set_bulbs
+            user_input[CONF_POWER_PUSH_THROTTLE] = self.power_push_throttle
 
             return self.async_create_entry(
                 title="IKEA Dirigera Hub : {}".format(user_input[CONF_IP_ADDRESS]),
@@ -160,6 +169,7 @@ class OptionsFlowHandler(config_entries.OptionsFlowWithConfigEntry):
 
             self.ip = user_input[CONF_IP_ADDRESS]
             self.hide_device_set_bulbs = user_input[CONF_HIDE_DEVICE_SET_BULBS]
+            self.power_push_throttle = user_input.get(CONF_POWER_PUSH_THROTTLE, DEFAULT_POWER_PUSH_THROTTLE)
             logger.debug(f"IN THIS STEP hide.. set {self.hide_device_set_bulbs}")
 
             if self.ip is None or len(self.ip.strip()) == 0:
@@ -215,6 +225,7 @@ class OptionsFlowHandler(config_entries.OptionsFlowWithConfigEntry):
             user_input[CONF_IP_ADDRESS] = self.ip
             user_input[CONF_TOKEN] = token
             user_input[CONF_HIDE_DEVICE_SET_BULBS] = self.hide_device_set_bulbs
+            user_input[CONF_POWER_PUSH_THROTTLE] = getattr(self, "power_push_throttle", DEFAULT_POWER_PUSH_THROTTLE)
             logger.debug("before create entry...")
 
             self.hass.config_entries.async_update_entry(self.config_entry, data=user_input,

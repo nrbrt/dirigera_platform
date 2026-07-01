@@ -28,7 +28,7 @@ from homeassistant.const import CONF_IP_ADDRESS, CONF_TOKEN, UnitOfTime, CONCENT
 from homeassistant.core import HomeAssistantError
 from homeassistant.helpers.entity import EntityCategory
 
-from .const import DOMAIN, PLATFORM, DISCOVERY_COORDINATOR
+from .const import DOMAIN, PLATFORM, DISCOVERY_COORDINATOR, CONF_POWER_PUSH_THROTTLE, DEFAULT_POWER_PUSH_THROTTLE
 from .hub_event_listener import hub_event_listener, registry_entry
 
 logger = logging.getLogger("custom_components.dirigera_platform")
@@ -51,9 +51,12 @@ async def async_setup_entry(
     if len(platform.empty_scenes) > 0:
         await hass.async_add_executor_job(hub.delete_empty_scenes)
 
+    # Power-sensor push throttle (#40); configurable via the integration options.
+    power_push_throttle = config_entry.data.get(CONF_POWER_PUSH_THROTTLE, DEFAULT_POWER_PUSH_THROTTLE)
+
     await add_controllers_sensors(hass, async_add_entities, hub, platform.controllers)
     await add_environment_sensors(async_add_entities, platform.environment_sensors)
-    await add_outlet_power_attrs(async_add_entities, platform.outlets)
+    await add_outlet_power_attrs(async_add_entities, platform.outlets, power_push_throttle)
 
     # Add light sensor illuminance entities (MYGGSPRAY)
     light_sensor_entities = [ikea_light_sensor_lux(x) for x in platform.light_sensors]
@@ -124,7 +127,7 @@ async def add_environment_sensors(async_add_entities, env_devices):
 
     async_add_entities(env_sensors)
 
-async def add_outlet_power_attrs(async_add_entities, outlets):
+async def add_outlet_power_attrs(async_add_entities, outlets, push_throttle=None):
     # Add sensors for the outlets
     power_entities = []
     # Explicit attr -> entity class map (used to be an eval on the attr name)
@@ -137,12 +140,19 @@ async def add_outlet_power_attrs(async_add_entities, outlets):
         "time_of_last_energy_reset": time_of_last_energy_reset_sensor,
         "total_energy_consumed_last_updated": total_energy_consumed_last_updated_sensor,
     }
+    # These ride the high-frequency (~8s) WebSocket push; throttle their HA
+    # state pushes to spare the recorder (#40). The others (energy totals etc.)
+    # change rarely and are left unthrottled.
+    throttled_attrs = {"current_amps", "current_active_power", "current_voltage"}
     # Some outlets like INSPELNING Smart plug have ability to report power, so add those as well
     logger.debug("Looking for extra attributes of power/current/voltage in outlet....")
     for outlet in outlets:
         for attr, sensor_cls in power_attr_sensors.items():
             if getattr(outlet._json_data.attributes, attr, None) is not None:
-                power_entities.append(sensor_cls(outlet))
+                entity = sensor_cls(outlet)
+                if push_throttle is not None and attr in throttled_attrs:
+                    entity._ha_push_throttle_seconds = push_throttle
+                power_entities.append(entity)
 
     logger.debug(f"Found {len(power_entities)}, power attribute sensors for outlets")
     async_add_entities(power_entities)

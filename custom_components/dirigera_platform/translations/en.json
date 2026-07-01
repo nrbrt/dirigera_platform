@@ -7,7 +7,8 @@
         "user": {
           "data": {
             "ip_address": "Hub IP",
-            "hide_device_set_bulbs": "Hide Device Set Bulbs"
+            "hide_device_set_bulbs": "Hide Device Set Bulbs",
+            "power_push_throttle_seconds": "Power sensor push throttle (seconds, 0 = off)"
           },
           "description": "Enter IKEA Dirigera Hub Details",
           "title": "IKEA Dirigera Hub Setup"
@@ -32,7 +33,8 @@
           "data": {
             "ip_address": "Hub IP",
             "token": "token",
-            "hide_device_set_bulbs": "Hide Device Set Bulbs"
+            "hide_device_set_bulbs": "Hide Device Set Bulbs",
+            "power_push_throttle_seconds": "Power sensor push throttle (seconds, 0 = off)"
           },
           "description": "Update IKEA Dirigera Hub Setting..."
         },

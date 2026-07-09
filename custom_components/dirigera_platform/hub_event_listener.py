@@ -782,6 +782,14 @@ class hub_event_listener(threading.Thread):
 
             # Update HA state if attributes changed OR if reachability/room changed
             if (has_attributes or reachability_changed or room_changed) and not skip_state_push:
+                # During HA shutdown this WebSocket thread can still receive events
+                # after the event loop is closed; scheduling a state update then
+                # raises "RuntimeError: Event loop is closed" and spams a warning
+                # per event (#42). The keepalive path already guards on
+                # _request_to_stop, so mirror that here and also bail if the loop
+                # has already been closed.
+                if self._request_to_stop or self._loop.is_closed():
+                    return
                 entity.schedule_update_ha_state(False)
 
                 if registry_value.cascade_entity is not None:

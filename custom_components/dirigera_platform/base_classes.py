@@ -534,6 +534,13 @@ class ikea_vindstyrka_device(ikea_base_device):
         await self._throttled_update()
 
 class ikea_vindstyrka_temperature(ikea_base_device_sensor, SensorEntity):
+    # #40: currentTemperature is in the environmentSensor WebSocket push
+    # allowlist, so this sensor is push driven. Disable HA polling and throttle
+    # the push so recorder writes honour the configured interval (same pattern
+    # as the outlet power sensors).
+    _attr_should_poll = False
+    _ha_push_throttle_seconds: int = DEFAULT_POWER_PUSH_THROTTLE
+
     def __init__(self, device: ikea_vindstyrka_device) -> None:
         super().__init__(
             device, 
@@ -549,6 +556,10 @@ class ikea_vindstyrka_temperature(ikea_base_device_sensor, SensorEntity):
         return self._device.current_temperature
  
 class ikea_vindstyrka_humidity(ikea_base_device_sensor, SensorEntity):
+    # #40: currentRH is push driven; see ikea_vindstyrka_temperature.
+    _attr_should_poll = False
+    _ha_push_throttle_seconds: int = DEFAULT_POWER_PUSH_THROTTLE
+
     def __init__(self, device: ikea_vindstyrka_device) -> None:
         logger.debug("ikea_vindstyrka_humidity ctor...")
         super().__init__(
@@ -569,6 +580,15 @@ class WhichPM25(Enum):
     MAX = 2
 
 class ikea_vindstyrka_pm25(ikea_base_device_sensor, SensorEntity):
+    # #40: only CURRENT PM2.5 rides the WebSocket push (currentPM25 is in the
+    # allowlist); MIN/MAX measured values are refreshed only by the poll fetch,
+    # so they must keep polling. The throttle applies to the pushed CURRENT.
+    _ha_push_throttle_seconds: int = DEFAULT_POWER_PUSH_THROTTLE
+
+    @property
+    def should_poll(self) -> bool:
+        return self._pm25_type != WhichPM25.CURRENT
+
     def __init__(
         self, device: ikea_vindstyrka_device, pm25_type: WhichPM25
     ) -> None:
@@ -605,6 +625,10 @@ class ikea_vindstyrka_pm25(ikea_base_device_sensor, SensorEntity):
         return None
 
 class ikea_vindstyrka_voc_index(ikea_base_device_sensor, SensorEntity):
+    # #40: vocIndex is push driven; see ikea_vindstyrka_temperature.
+    _attr_should_poll = False
+    _ha_push_throttle_seconds: int = DEFAULT_POWER_PUSH_THROTTLE
+
     def __init__(self, device: ikea_vindstyrka_device) -> None:
         logger.debug("ikea_vindstyrka_voc_index ctor...")
         # The hub reports a Sensirion-style dimensionless VOC *index* (1-500),
@@ -620,6 +644,10 @@ class ikea_vindstyrka_voc_index(ikea_base_device_sensor, SensorEntity):
         return self._device.voc_index
 
 class ikea_alpstuga_co2(ikea_base_device_sensor, SensorEntity):
+    # #40: currentCO2 is push driven; see ikea_vindstyrka_temperature.
+    _attr_should_poll = False
+    _ha_push_throttle_seconds: int = DEFAULT_POWER_PUSH_THROTTLE
+
     def __init__(self, device: ikea_vindstyrka_device) -> None:
         logger.debug("ikea_alpstuga_co2 ctor...")
         super().__init__(

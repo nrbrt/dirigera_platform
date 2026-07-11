@@ -55,7 +55,7 @@ async def async_setup_entry(
     power_push_throttle = config_entry.data.get(CONF_POWER_PUSH_THROTTLE, DEFAULT_POWER_PUSH_THROTTLE)
 
     await add_controllers_sensors(hass, async_add_entities, hub, platform.controllers)
-    await add_environment_sensors(async_add_entities, platform.environment_sensors)
+    await add_environment_sensors(async_add_entities, platform.environment_sensors, power_push_throttle)
     await add_outlet_power_attrs(async_add_entities, platform.outlets, power_push_throttle)
 
     # Add light sensor illuminance entities (MYGGSPRAY)
@@ -102,7 +102,7 @@ async def async_setup_entry(
 
     logger.debug("sensor Complete async_setup_entry")
 
-async def add_environment_sensors(async_add_entities, env_devices):
+async def add_environment_sensors(async_add_entities, env_devices, push_throttle=None):
     env_sensors = []
     for env_device in env_devices:
         # For each device setup up multiple entities
@@ -122,6 +122,14 @@ async def add_environment_sensors(async_add_entities, env_devices):
             env_sensors.append(ikea_vindstyrka_voc_index(env_device))
         if getattr(env_device,"current_c_o2", None) is not None:
             env_sensors.append(ikea_alpstuga_co2(env_device))
+
+    # #40: the push-driven env sensors (temp / RH / current PM2.5 / VOC / CO2)
+    # carry a class-default throttle; honour the configured interval here too,
+    # mirroring the outlet power sensors. Harmless on the poll-driven MIN/MAX
+    # PM2.5 (they do not push, so the throttle is never consulted for them).
+    if push_throttle is not None:
+        for entity in env_sensors:
+            entity._ha_push_throttle_seconds = push_throttle
 
     logger.debug("Found {} env entities to setup...".format(len(env_sensors)))
 

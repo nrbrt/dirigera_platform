@@ -963,6 +963,11 @@ class current_amps_sensor(ikea_base_device_sensor, SensorEntity):
     # Rate-limit HA state pushes to spare the recorder (#40). Default from
     # const; overridden per-instance from the integration options at setup.
     _ha_push_throttle_seconds: int = DEFAULT_POWER_PUSH_THROTTLE
+    # #40 follow-up: this sensor's outlet device sets skip_update=True and is
+    # driven entirely by the ~8s WebSocket push, so HA's default 30s poll only
+    # re-wrote the (WS-updated) value to the recorder and bypassed the throttle
+    # above. Disable polling so the throttled push is the only write path.
+    _attr_should_poll = False
 
     def __init__(self, device):
         super().__init__(
@@ -988,6 +993,9 @@ class current_active_power_sensor(ikea_base_device_sensor, SensorEntity):
     # Rate-limit HA state pushes to spare the recorder (#40). Default from
     # const; overridden per-instance from the integration options at setup.
     _ha_push_throttle_seconds: int = DEFAULT_POWER_PUSH_THROTTLE
+    # #40 follow-up: WebSocket-push driven (outlet device skip_update=True);
+    # disable HA polling so the poll loop stops bypassing the push throttle.
+    _attr_should_poll = False
 
     def __init__(self, device):
         super().__init__(
@@ -1012,6 +1020,9 @@ class current_voltage_sensor(ikea_base_device_sensor, SensorEntity):
     # slowly so its impact is lower, but it rides the same ~8s WebSocket push.
     # Default from const; overridden per-instance from the options at setup.
     _ha_push_throttle_seconds: int = DEFAULT_POWER_PUSH_THROTTLE
+    # #40 follow-up: WebSocket-push driven (outlet device skip_update=True);
+    # disable HA polling so the poll loop stops bypassing the push throttle.
+    _attr_should_poll = False
     
     def __init__(self, device):
         super().__init__(

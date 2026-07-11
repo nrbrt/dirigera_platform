@@ -242,12 +242,21 @@ class ikea_base_device:
 
     @staticmethod
     def _push_throttled(listener, force_refresh: bool) -> bool:
-        # Per-listener push throttle (#40): high-frequency sensors (power/amps/
-        # voltage) opt into a minimum interval between HA state pushes to spare
-        # the recorder. The device's internal data was already updated before
-        # this fan-out, so the sensor's native_value keeps returning the live
-        # value; only the HA notification (and its recorder write) is skipped.
+        # Per-listener push throttle (#40): high-frequency push sensors (outlet
+        # power/amps/voltage and environment temp/RH/PM2.5/VOC/CO2) opt into a
+        # minimum interval between HA state pushes to spare the recorder. The
+        # device's internal data was already updated before this fan-out, so the
+        # sensor's native_value keeps returning the live value; only the HA
+        # notification (and its recorder write) is skipped.
         # A forced refresh is never throttled (it is an explicit request).
+        #
+        # NB this is a FLOOR, not an exact interval: a write only happens when a
+        # push actually arrives, so the effective interval rounds up to the first
+        # push after the limit elapses. With a ~30s native push cadence and a 60s
+        # limit the 2nd push (~59s) is still blocked and only the 3rd (~89s)
+        # clears, giving an effective ~90s rather than 60s. Measured and reported
+        # by @m3gg3 on #40; documented in the option help rather than "fixed",
+        # since a floor is the correct semantics for a throttle.
         if force_refresh:
             return False
         throttle = getattr(listener, "_ha_push_throttle_seconds", 0)

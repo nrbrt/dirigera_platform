@@ -250,23 +250,72 @@ class ikea_base_device:
         # notification (and its recorder write) is skipped.
         # A forced refresh is never throttled (it is an explicit request).
         #
-        # NB this is a FLOOR, not an exact interval: a write only happens when a
-        # push actually arrives, so the effective interval rounds up to the first
-        # push after the limit elapses. With a ~30s native push cadence and a 60s
-        # limit the 2nd push (~59s) is still blocked and only the 3rd (~89s)
-        # clears, giving an effective ~90s rather than 60s. Measured and reported
-        # by @m3gg3 on #40; documented in the option help rather than "fixed",
-        # since a floor is the correct semantics for a throttle.
+        # #44: a throttled push is COALESCED, not dropped. The device data was
+        # already updated before this fan-out, so arm a one-shot trailing flush
+        # that writes the state once the window expires. Without it the last
+        # push before a quiet period was lost: switch a metering plug off and
+        # the hub stops sending electricalSensor events, so the final value
+        # (and the #36 is-off clamp to 0 W) never reached HA and the power
+        # sensors froze on a stale nonzero reading until restart (GRILLPLATS,
+        # issue #44). Before v0.3.12 HA's 30s entity poll flushed the cache and
+        # masked this; fcc3bfc disabled that poll, exposing the lossy throttle.
+        # Side effect: while pushes keep arriving, writes now land once per
+        # interval instead of rounding up to the next push (the ~90s effective
+        # interval @m3gg3 measured on #40 becomes ~60s).
         if force_refresh:
             return False
         throttle = getattr(listener, "_ha_push_throttle_seconds", 0)
         if throttle <= 0:
             return False
         now = time.monotonic()
-        if now - getattr(listener, "_ha_last_push_at", 0.0) < throttle:
+        elapsed = now - getattr(listener, "_ha_last_push_at", 0.0)
+        if elapsed < throttle:
+            ikea_base_device._arm_trailing_flush(listener, throttle - elapsed)
             return True
         listener._ha_last_push_at = now
         return False
+
+    @staticmethod
+    def _arm_trailing_flush(listener, delay: float) -> None:
+        """Schedule a one-shot state write for when the throttle window ends.
+
+        Called from the WebSocket thread (hub_event_listener.on_message), so
+        the timer must be created on the event loop via call_soon_threadsafe.
+        At most one flush is pending per listener; the flush itself re-opens
+        the throttle window, so the write rate stays capped at one write per
+        configured interval."""
+        if getattr(listener, "_ha_flush_pending", False):
+            return
+        listener._ha_flush_pending = True
+
+        def _arm() -> None:
+            listener.hass.loop.call_later(
+                max(delay, 0.5), ikea_base_device._run_trailing_flush, listener
+            )
+
+        try:
+            listener.hass.loop.call_soon_threadsafe(_arm)
+        except RuntimeError:
+            # Event loop already closed (shutdown), nothing left to flush.
+            listener._ha_flush_pending = False
+
+    @staticmethod
+    def _run_trailing_flush(listener) -> None:
+        # Runs on the event loop. Write whatever the cache holds NOW: for a
+        # plug that meanwhile switched off this is where the #36 clamp to 0
+        # finally lands in HA state.
+        listener._ha_flush_pending = False
+        if listener.hass is None:
+            return
+        listener._ha_last_push_at = time.monotonic()
+        try:
+            listener.schedule_update_ha_state(False)
+        except Exception:
+            # Entity may have been removed between arming and firing.
+            logger.debug(
+                f"trailing flush skipped for {getattr(listener, 'unique_id', '?')}",
+                exc_info=True,
+            )
 
 class ikea_base_device_sensor():
     _attr_has_entity_name = True

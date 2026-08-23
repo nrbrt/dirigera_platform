@@ -58,6 +58,106 @@ controller_trigger_last_time_map = {}
 def to_snake_case(name:str) -> str:
     return re.sub(r'(?<!^)(?=[A-Z])', '_', name).lower()
 
+# --- #45: protect TOTAL_INCREASING energy sensors from spurious dips ---------
+#
+# Home Assistant reads any decrease on a TOTAL_INCREASING sensor as a counter
+# reset and adds the whole total to long-term statistics again, so a single bad
+# value permanently inflates the history. A GRILLPLATS reporting 5.982 kWh that
+# dips to 5 kWh for 137 ms injected 5.982 kWh into the statistics three times in
+# two weeks; on a plug sitting at 263 kWh one dip would inject 263 kWh.
+#
+# The reconnect resync added for #39 replays raw /devices through this same
+# event path, and that bypasses the electricalSensor merge that get_outlets()
+# applies for split plugs (GRILLPLATS, TOFSMYGGA), so a stale or coarser value
+# can reach the entity there.
+#
+# A genuine energy reset is not silent: the device advances
+# timeOfLastEnergyReset. So only accept a decreasing total when that timestamp
+# moved, or when the value drops to zero, which is how a reset is reported.
+ENERGY_TOTAL_ATTRS = ("totalEnergyConsumed", "energyConsumedAtLastReset")
+
+# How many consecutive held-back decreases before the lower value is accepted
+# anyway. Without this a real reset that the hub failed to timestamp would
+# freeze the sensor for good. An isolated glitch never gets here: in #45 the
+# correct value follows within ~140 ms and clears the counter.
+ENERGY_DECREASE_ACCEPT_AFTER = 3
+
+
+def _as_utc_datetime(value):
+    """Best-effort tz-aware datetime for a timeOfLastEnergyReset value.
+
+    The value may arrive as an ISO string from the hub or as a datetime that an
+    earlier update already parsed."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        try:
+            value = parser.parse(value)
+        except (ValueError, OverflowError, TypeError):
+            return None
+    if not isinstance(value, datetime.datetime):
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=datetime.timezone.utc)
+    return value
+
+
+def _energy_reset_advanced(entity, attributes) -> bool:
+    """True when this payload reports a newer energy reset than the one held.
+
+    Must be evaluated before any attribute of the payload is written, because
+    the total and the reset timestamp can arrive in the same dict and the
+    iteration order of that dict is not something to depend on."""
+    if "timeOfLastEnergyReset" not in attributes:
+        return False
+    incoming = _as_utc_datetime(attributes.get("timeOfLastEnergyReset"))
+    if incoming is None:
+        return False
+    previous = _as_utc_datetime(
+        getattr(entity._json_data.attributes, "time_of_last_energy_reset", None)
+    )
+    if previous is None:
+        # Nothing to compare against, so do not stand in the way of the write.
+        return True
+    return incoming > previous
+
+
+def _hold_back_energy_decrease(entity, key_attr, value_to_set) -> bool:
+    """True when this decreasing energy total should not be written.
+
+    Only called when the payload carries no newer timeOfLastEnergyReset."""
+    if isinstance(value_to_set, bool) or not isinstance(value_to_set, (int, float)):
+        return False
+    previous = getattr(entity._json_data.attributes, key_attr, None)
+    if isinstance(previous, bool) or not isinstance(previous, (int, float)):
+        return False
+
+    held_map = getattr(entity, "_energy_decrease_held", None)
+    if held_map is None:
+        held_map = {}
+        entity._energy_decrease_held = held_map
+
+    if value_to_set >= previous or value_to_set <= 0:
+        held_map[key_attr] = 0
+        return False
+
+    held = held_map.get(key_attr, 0) + 1
+    held_map[key_attr] = held
+    if held >= ENERGY_DECREASE_ACCEPT_AFTER:
+        logger.warning(
+            f"{key_attr} stayed below the stored value ({value_to_set} < {previous}) for "
+            f"{held} consecutive updates without a newer timeOfLastEnergyReset; "
+            f"accepting it as a reset the hub did not timestamp"
+        )
+        held_map[key_attr] = 0
+        return False
+
+    logger.warning(
+        f"Ignoring decrease of {key_attr} from {previous} to {value_to_set} with no newer "
+        f"timeOfLastEnergyReset (issue #45); holding {held}/{ENERGY_DECREASE_ACCEPT_AFTER}"
+    )
+    return True
+
 class registry_entry:
     def __init__(self, entity:any, cascade_entity:any = None):
         self._entity = entity
@@ -712,6 +812,8 @@ class hub_event_listener(threading.Thread):
 
             if has_attributes:
                 attributes = info["attributes"]
+                # Read before the loop writes anything (see #45).
+                energy_reset_advanced = _energy_reset_advanced(entity, attributes)
 
                 for key in attributes:
                     if key not in to_process_attr:
@@ -740,6 +842,10 @@ class hub_event_listener(threading.Thread):
                             except:
                                 #Ignore the exception
                                 logger.warning(f"Failed to convert {attributes[key]} to date/time...")
+
+                        if key in ENERGY_TOTAL_ATTRS and not energy_reset_advanced:
+                            if _hold_back_energy_decrease(entity, key_attr, value_to_set):
+                                continue
 
                         setattr(entity._json_data.attributes,key_attr, value_to_set)
                         logger.debug(f"Entity after setting: {entity._json_data}")

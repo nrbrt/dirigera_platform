@@ -1049,6 +1049,11 @@ class current_amps_sensor(ikea_base_device_sensor, SensorEntity):
     # Rate-limit HA state pushes to spare the recorder (#40). Default from
     # const; overridden per-instance from the integration options at setup.
     _ha_push_throttle_seconds: int = DEFAULT_POWER_PUSH_THROTTLE
+    # #46: off by default, matching the Zigbee2MQTT plug layout where only
+    # Power and Energy are enabled. Existing entities are unaffected - this
+    # flag is only consulted when an entity is registered for the first time,
+    # so nobody loses a sensor or its history by upgrading.
+    _attr_entity_registry_enabled_default = False
     # #40 follow-up: this sensor's outlet device sets skip_update=True and is
     # driven entirely by the ~8s WebSocket push, so HA's default 30s poll only
     # re-wrote the (WS-updated) value to the recorder and bypassed the throttle
@@ -1058,8 +1063,10 @@ class current_amps_sensor(ikea_base_device_sensor, SensorEntity):
     def __init__(self, device):
         super().__init__(
                             device = device, 
+                            # id_suffix is load-bearing: it is the unique_id,
+                            # so it must NOT change with the rename (#46).
                             id_suffix="CA01",
-                            name="Current Amps",
+                            name="Current",
                             #uom="A",
                             native_unit_of_measurement=UnitOfElectricCurrent.AMPERE,
                             state_class=SensorStateClass.MEASUREMENT,
@@ -1087,10 +1094,10 @@ class current_active_power_sensor(ikea_base_device_sensor, SensorEntity):
         super().__init__(
                             device = device, 
                             id_suffix="CAP01",
-                            name="Current Active Power",
+                            name="Power",
                             native_unit_of_measurement=UnitOfPower.WATT,
                             state_class=SensorStateClass.MEASUREMENT,
-                            icon="mdi:lightning-bolt-outline",
+                            icon="mdi:flash",
                             device_class=SensorDeviceClass.POWER)
 
     @property
@@ -1109,16 +1116,18 @@ class current_voltage_sensor(ikea_base_device_sensor, SensorEntity):
     # #40 follow-up: WebSocket-push driven (outlet device skip_update=True);
     # disable HA polling so the poll loop stops bypassing the push throttle.
     _attr_should_poll = False
+    # #46: off by default alongside Current; see the note there.
+    _attr_entity_registry_enabled_default = False
     
     def __init__(self, device):
         super().__init__(
                             device = device, 
                             id_suffix="CV01",
-                            name="Current Voltage",
+                            name="Voltage",
                             #uom="V",
                             native_unit_of_measurement=UnitOfElectricPotential.VOLT,
                             state_class=SensorStateClass.MEASUREMENT,
-                            icon="mdi:power-plug",
+                            icon="mdi:sine-wave",
                             device_class=SensorDeviceClass.VOLTAGE)
 
     @property
@@ -1130,9 +1139,9 @@ class total_energy_consumed_sensor(ikea_base_device_sensor, SensorEntity):
         super().__init__(
                             device = device, 
                             id_suffix="TEC01",
-                            name="Total Energy Consumed",
+                            name="Energy",
                             native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
-                            icon="mdi:lightning-bolt-outline",
+                            icon="mdi:lightning-bolt",
                             device_class=SensorDeviceClass.ENERGY,
                             state_class=SensorStateClass.TOTAL_INCREASING)
 
@@ -1141,11 +1150,15 @@ class total_energy_consumed_sensor(ikea_base_device_sensor, SensorEntity):
         return getattr(self._device, "total_energy_consumed")
     
 class energy_consumed_at_last_reset_sensor(ikea_base_device_sensor, SensorEntity):
+    # #46: a bookkeeping value rather than a live reading, so off by default
+    # like Current and Voltage.
+    _attr_entity_registry_enabled_default = False
+
     def __init__(self, device):
         super().__init__(
                             device = device, 
                             id_suffix="ELAR01",
-                            name="Energy Consumed at Last Reset",
+                            name="Energy at last reset",
                             native_unit_of_measurement=UnitOfEnergy.KILO_WATT_HOUR,
                             icon="mdi:lightning-bolt-outline",
                             device_class=SensorDeviceClass.ENERGY,

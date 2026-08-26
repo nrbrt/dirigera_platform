@@ -18,6 +18,7 @@ from homeassistant.const import CONF_IP_ADDRESS, CONF_TOKEN, Platform
 # Import the device class from the component that you want to support
 from homeassistant.core import HomeAssistant
 import homeassistant.helpers.config_validation as cv
+from homeassistant.helpers import entity_registry as er
 
 from .const import (
     DOMAIN,
@@ -50,6 +51,49 @@ def resolve_platforms(entry_data: dict) -> list[Platform]:
     return [p for p in PLATFORMS_TO_SETUP if p.value in selected]
 
 logger = logging.getLogger("custom_components.dirigera_platform")
+
+
+def sync_platform_entity_registry(hass, entry, platforms) -> None:
+    """Hide the entities of platforms this entry no longer sets up (#47).
+
+    Not forwarding a platform does not remove its entities. They stay in the
+    entity registry and turn up as unavailable with restored=True, so they still
+    appear in every entity picker and search. Measured on a live hub: switching
+    off one platform left its entity sitting there exactly like that. Since the
+    complaint in #47 is that duplicates make entity management harder, a filter
+    that leaves ghosts behind does not actually solve anything.
+
+    Disabling rather than removing is deliberate. Removing a registry entry takes
+    the user's rename, area assignment and entity_id override with it, and
+    re-selecting the platform cannot bring those back. Disabling hides the entity
+    from the UI, survives a round trip intact, and is reversible.
+
+    This only ever touches what it disabled itself: an entity the user switched
+    off by hand keeps disabled_by USER and stays off, even when its platform is
+    selected again. Entries are only written when the desired state differs, so
+    a setup that changes nothing fires no registry events at all.
+    """
+    registry = er.async_get(hass)
+    wanted = {platform.value for platform in platforms}
+    disabled = 0
+    re_enabled = 0
+
+    for reg_entry in er.async_entries_for_config_entry(registry, entry.entry_id):
+        selected = reg_entry.domain in wanted
+        if not selected and reg_entry.disabled_by is None:
+            registry.async_update_entity(
+                reg_entry.entity_id,
+                disabled_by=er.RegistryEntryDisabler.INTEGRATION,
+            )
+            disabled += 1
+        elif selected and reg_entry.disabled_by == er.RegistryEntryDisabler.INTEGRATION:
+            registry.async_update_entity(reg_entry.entity_id, disabled_by=None)
+            re_enabled += 1
+
+    if disabled or re_enabled:
+        logger.info(
+            "Platform filter: disabled %d entities, re-enabled %d", disabled, re_enabled
+        )
 
 # Validation of the user's configuration
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
@@ -254,6 +298,11 @@ async def async_setup_entry(
     platforms = resolve_platforms(hass_data)
     hass.data[DOMAIN][entry.entry_id]["platforms"] = platforms
     logger.debug("Setting up platforms: %s", [p.value for p in platforms])
+    # Before forwarding, not after: a platform that just got selected again must
+    # have its entities re-enabled first, otherwise the platform sets up while
+    # the registry still lists them as disabled and they stay missing until the
+    # next reload.
+    sync_platform_entity_registry(hass, entry, platforms)
     await hass.config_entries.async_forward_entry_setups(entry, platforms)
 
     # Now lets start the event listener

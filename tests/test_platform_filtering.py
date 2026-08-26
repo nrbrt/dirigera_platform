@@ -137,3 +137,108 @@ def test_setup_stores_the_resolved_list_on_the_entry():
     src = _function_source("async_setup_entry")
     assert 'hass.data[DOMAIN][entry.entry_id]["platforms"]' in src
     assert "async_forward_entry_setups(entry, platforms)" in src
+
+
+# --- #47 follow-up: deselected platforms must not leave ghost entities -------
+#
+# Measured on a live hub before this was added: switching off a platform left
+# its entity in the registry as unavailable with restored=True, so it still
+# showed up in every picker. That is the exact complaint in the issue, so the
+# filter is only useful if it hides them too.
+
+
+class _FakeRegistryEntryDisabler:
+    INTEGRATION = "integration"
+    USER = "user"
+
+
+class _FakeEntry:
+    def __init__(self, entity_id, disabled_by=None):
+        self.entity_id = entity_id
+        self.disabled_by = disabled_by
+
+    @property
+    def domain(self):
+        return self.entity_id.split(".")[0]
+
+
+class _FakeRegistry:
+    def __init__(self, entries):
+        self.entries = entries
+        self.writes = []
+
+    def async_update_entity(self, entity_id, **changes):
+        self.writes.append((entity_id, changes.get("disabled_by")))
+        for e in self.entries:
+            if e.entity_id == entity_id:
+                e.disabled_by = changes.get("disabled_by")
+
+
+def _load_sync_function(registry):
+    """Exec the real sync_platform_entity_registry against a fake registry."""
+    node = next(
+        n for n in TREE.body
+        if isinstance(n, ast.FunctionDef) and n.name == "sync_platform_entity_registry"
+    )
+    er_stub = type("er", (), {
+        "async_get": staticmethod(lambda hass: registry),
+        "async_entries_for_config_entry": staticmethod(lambda reg, entry_id: reg.entries),
+        "RegistryEntryDisabler": _FakeRegistryEntryDisabler,
+    })
+    logged = []
+    ns = {
+        "er": er_stub,
+        "logger": type("L", (), {"info": staticmethod(lambda *a: logged.append(a))}),
+        "set": set,
+    }
+    exec(compile(ast.Module(body=[node], type_ignores=[]), INIT, "exec"), ns)
+    return ns["sync_platform_entity_registry"]
+
+
+def _run(entries, selected):
+    registry = _FakeRegistry(entries)
+    fn = _load_sync_function(registry)
+    platforms = [_Platform(name) for name in selected]
+    fn(object(), type("E", (), {"entry_id": "abc"})(), platforms)
+    return registry
+
+
+def test_deselected_platform_entities_are_disabled():
+    reg = _run([_FakeEntry("switch.plug"), _FakeEntry("light.lamp")], ["light"])
+    assert reg.writes == [("switch.plug", "integration")]
+    assert reg.entries[1].disabled_by is None, "a selected platform must be left alone"
+
+
+def test_reselecting_a_platform_re_enables_what_we_disabled():
+    reg = _run([_FakeEntry("switch.plug", "integration")], ["switch", "light"])
+    assert reg.writes == [("switch.plug", None)]
+
+
+def test_a_user_disabled_entity_is_never_touched():
+    """
+    The important one. Re-enabling everything on the way back would silently
+    undo a deliberate user choice, and they would have no idea why.
+    """
+    entries = [_FakeEntry("switch.plug", "user"), _FakeEntry("light.lamp", "user")]
+    reg = _run(entries, ["switch", "light"])
+    assert reg.writes == [], "user-disabled entities must survive a reselect"
+    reg = _run(entries, ["light"])
+    assert reg.writes == [], "and must not be re-stamped as integration-disabled"
+
+
+def test_running_twice_writes_nothing_the_second_time():
+    """Idempotent, so a plain restart fires no registry events."""
+    entries = [_FakeEntry("switch.plug"), _FakeEntry("light.lamp")]
+    first = _run(entries, ["light"])
+    assert len(first.writes) == 1
+    second = _run(entries, ["light"])
+    assert second.writes == []
+
+
+def test_setup_hides_ghosts_before_forwarding_platforms():
+    """
+    Order matters: a just-reselected platform has to be re-enabled before its
+    setup runs, or the entities stay missing until the next reload.
+    """
+    src = _function_source("async_setup_entry")
+    assert src.index("sync_platform_entity_registry(") < src.index("async_forward_entry_setups(")

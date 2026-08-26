@@ -19,7 +19,14 @@ from homeassistant.const import CONF_IP_ADDRESS, CONF_TOKEN, Platform
 from homeassistant.core import HomeAssistant
 import homeassistant.helpers.config_validation as cv
 
-from .const import DOMAIN, CONF_HIDE_DEVICE_SET_BULBS, PLATFORM, DISCOVERY_COORDINATOR
+from .const import (
+    DOMAIN,
+    CONF_HIDE_DEVICE_SET_BULBS,
+    CONF_ENABLED_PLATFORMS,
+    DEFAULT_ENABLED_PLATFORMS,
+    PLATFORM,
+    DISCOVERY_COORDINATOR,
+)
 from .hub_event_listener import hub_event_listener
 from .device_discovery import DeviceDiscoveryCoordinator, set_discovery_coordinator
 
@@ -30,6 +37,17 @@ PLATFORMS_TO_SETUP = [  Platform.SWITCH,
                         Platform.COVER, 
                         Platform.FAN,
                         Platform.SCENE]
+
+# Issue #47: which of the platforms above this entry actually sets up. Missing
+# key (every entry created before the option existed) means all of them.
+def resolve_platforms(entry_data: dict) -> list[Platform]:
+    """Platforms to set up for this entry, in the fixed order of PLATFORMS_TO_SETUP."""
+    selected = entry_data.get(CONF_ENABLED_PLATFORMS)
+    if not selected:
+        # Also covers an empty list: an entry that sets up nothing at all is a
+        # broken entry, not a valid choice, so fall back to everything.
+        return list(PLATFORMS_TO_SETUP)
+    return [p for p in PLATFORMS_TO_SETUP if p.value in selected]
 
 logger = logging.getLogger("custom_components.dirigera_platform")
 
@@ -229,7 +247,14 @@ async def async_setup_entry(
     logger.debug("Device discovery coordinator initialized")
 
     # Setup the entities - each platform will register its callback with discovery coordinator
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS_TO_SETUP)
+    # Store the resolved list on the entry BEFORE forwarding. async_unload_entry
+    # must unload exactly what was loaded; if it re-resolved from the (possibly
+    # just-changed) options instead, a platform the user switched off would
+    # never be unloaded and its entities would linger as orphans. See issue #47.
+    platforms = resolve_platforms(hass_data)
+    hass.data[DOMAIN][entry.entry_id]["platforms"] = platforms
+    logger.debug("Setting up platforms: %s", [p.value for p in platforms])
+    await hass.config_entries.async_forward_entry_setups(entry, platforms)
 
     # Now lets start the event listener
     hub_basic = Hub(hass_data[CONF_TOKEN], hass_data[CONF_IP_ADDRESS])
@@ -289,7 +314,11 @@ async def async_unload_entry(
 
     # all() over the gather result list itself — the old all([gather])
     # wrapped it in another list and was therefore always True.
-    unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS_TO_SETUP)
+    # Unload what was actually loaded, not what the current options say (issue
+    # #47). The fallback covers an entry that failed before the platforms were
+    # stored; unloading a platform that was never set up is a no-op.
+    loaded_platforms = entry_data.get("platforms") or resolve_platforms(dict(entry.data))
+    unload_ok = await hass.config_entries.async_unload_platforms(entry, loaded_platforms)
 
     # The options-update listener is removed via entry.async_on_unload.
     hass.data[DOMAIN].pop(entry.entry_id, None)

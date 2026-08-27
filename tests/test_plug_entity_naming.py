@@ -35,9 +35,9 @@ with open(SOURCE_PATH) as fh:
 
 # class name -> (id_suffix, entity name, icon, enabled by default)
 EXPECTED = {
-    "current_amps_sensor":                  ("CA01",   "Current",             "mdi:current-ac",     False),
+    "current_amps_sensor":                  ("CA01",   "Current",             "mdi:current-ac",     True),
     "current_active_power_sensor":          ("CAP01",  "Power",               "mdi:flash",          True),
-    "current_voltage_sensor":               ("CV01",   "Voltage",             "mdi:sine-wave",      False),
+    "current_voltage_sensor":               ("CV01",   "Voltage",             "mdi:sine-wave",      True),
     "total_energy_consumed_sensor":         ("TEC01",  "Energy",              "mdi:lightning-bolt", True),
     "energy_consumed_at_last_reset_sensor": ("ELAR01", "Energy at last reset", None,                False),
 }
@@ -103,11 +103,16 @@ def test_icons_follow_the_zigbee2mqtt_layout():
         assert _super_kwargs(_class(cls_name))["icon"] == icon
 
 
-def test_only_power_and_energy_are_enabled_by_default():
-    enabled = {c for c in EXPECTED if _enabled_by_default(_class(c))}
-    assert enabled == {"current_active_power_sensor", "total_energy_consumed_sensor"}, (
-        "a plug must start with exactly Power and Energy switched on; got %s"
-        % sorted(enabled)
+def test_only_the_last_reset_helper_is_disabled_by_default():
+    """A fresh Silvercrest plug on Zigbee2MQTT shows Energy, Power, Voltage and
+    Current, all four enabled and reporting (#46, reporter's own screenshot after
+    he corrected his first description). Matching that layout means the only
+    sensor we may register disabled is the last-reset bookkeeping value, which
+    Z2M has no counterpart for."""
+    disabled = {c for c in EXPECTED if not _enabled_by_default(_class(c))}
+    assert disabled == {"energy_consumed_at_last_reset_sensor"}, (
+        "a plug must start with Energy, Power, Voltage and Current switched on, "
+        "and only the last-reset helper off; got disabled=%s" % sorted(disabled)
     )
 
 

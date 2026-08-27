@@ -1049,11 +1049,13 @@ class current_amps_sensor(ikea_base_device_sensor, SensorEntity):
     # Rate-limit HA state pushes to spare the recorder (#40). Default from
     # const; overridden per-instance from the integration options at setup.
     _ha_push_throttle_seconds: int = DEFAULT_POWER_PUSH_THROTTLE
-    # #46: off by default, matching the Zigbee2MQTT plug layout where only
-    # Power and Energy are enabled. Existing entities are unaffected - this
-    # flag is only consulted when an entity is registered for the first time,
-    # so nobody loses a sensor or its history by upgrading.
-    _attr_entity_registry_enabled_default = False
+    # #46: enabled by default. The first version of this change registered
+    # Current and Voltage disabled, on the reporter's initial description that
+    # Zigbee2MQTT hides them. He corrected that himself after pairing a fresh
+    # Silvercrest plug on current HA and Z2M: the screenshot shows all four of
+    # Energy, Power, Voltage and Current enabled and reporting. Matching the
+    # Z2M layout therefore means leaving these on, and the earlier opt-out
+    # contradicted the very convention it claimed to follow.
     # #40 follow-up: this sensor's outlet device sets skip_update=True and is
     # driven entirely by the ~8s WebSocket push, so HA's default 30s poll only
     # re-wrote the (WS-updated) value to the recorder and bypassed the throttle
@@ -1116,8 +1118,7 @@ class current_voltage_sensor(ikea_base_device_sensor, SensorEntity):
     # #40 follow-up: WebSocket-push driven (outlet device skip_update=True);
     # disable HA polling so the poll loop stops bypassing the push throttle.
     _attr_should_poll = False
-    # #46: off by default alongside Current; see the note there.
-    _attr_entity_registry_enabled_default = False
+    # #46: enabled by default alongside Current; see the note there.
     
     def __init__(self, device):
         super().__init__(
@@ -1150,8 +1151,10 @@ class total_energy_consumed_sensor(ikea_base_device_sensor, SensorEntity):
         return getattr(self._device, "total_energy_consumed")
     
 class energy_consumed_at_last_reset_sensor(ikea_base_device_sensor, SensorEntity):
-    # #46: a bookkeeping value rather than a live reading, so off by default
-    # like Current and Voltage.
+    # #46: the one sensor that stays off by default. It is a bookkeeping value
+    # rather than a live reading, and Zigbee2MQTT has no counterpart for it at
+    # all, so there is no convention here to match and nothing is hidden that a
+    # Z2M user would expect to see.
     _attr_entity_registry_enabled_default = False
 
     def __init__(self, device):

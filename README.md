@@ -15,6 +15,7 @@ Contributions are welcome, feel free to open [issues](https://github.com/nrbrt/d
 - **Real-Time Updates** : full WebSocket event support for instant state changes across all device types
 - **Resilient Connection** : application-level WebSocket keepalive reduces hub "inactivity" disconnects, and all device state is automatically re-synced on every reconnect, so entities never silently go stale after the hub drops the connection
 - **Reliable Startup** : automatic retry on connection failure (`ConfigEntryNotReady`) instead of requiring manual reloads
+- **Selective Import** : choose which platforms this integration sets up. If another integration such as Matter already covers your lights and plugs, import only what it does not, and the entities and devices of a deselected platform are hidden rather than left behind as unavailable ghosts
 - **Multiple Hubs** : run more than one Dirigera hub side by side. Add the integration once per hub; each hub keeps its own device registry and event connection, so reloading one never disturbs another
 
 ## Upstream issues addressed in this fork
@@ -35,11 +36,15 @@ If you arrived here from an open issue on [sanjoyg/dirigera_platform](https://gi
 | [#198](https://github.com/sanjoyg/dirigera_platform/issues/198) | `ikea_bulb_device_set` has no attribute 'entity' | v0.2.8 (merged upstream PR #196) |
 | [#152](https://github.com/sanjoyg/dirigera_platform/issues/152) | IKEA Inspelning (plug with power sensor) | v0.2.5 (outlet + electricalSensor split-device merge) |
 | [#148](https://github.com/sanjoyg/dirigera_platform/issues/148) | Energy Consumed at Last Reset not updating | v0.2.5 (electricalSensor events routed to outlet) |
+| [#150](https://github.com/sanjoyg/dirigera_platform/issues/150) | Duplicate Devices with Matter & HACS | v0.3.17 (the duplicates come from running both integrations against the same hardware, so this fork cannot prevent them at the source, but "Platforms to import" lets you import only what Matter does not already cover) |
+
+### In progress (on a branch, not released)
+
+- [#46](https://github.com/nrbrt/dirigera_platform/issues/46) — *Zigbee2MQTT naming and defaults for plug sensors*: on branch `feature/entity-filtering-and-plug-naming`. Not yet verified on metering hardware, so it stays unreleased until it has been.
 
 ### Not addressed (out of scope or different root cause)
 
 - [#143](https://github.com/sanjoyg/dirigera_platform/issues/143) — *Power factor for Inspelning*: the Dirigera API does not expose `currentPowerFactor`; would require a user-configurable correction factor + derived sensor, not a code fix.
-- [#150](https://github.com/sanjoyg/dirigera_platform/issues/150) — *Duplicate Devices with Matter & HACS*: caused by running both Matter and Dirigera integrations against the same device, not by this integration.
 - [#194](https://github.com/sanjoyg/dirigera_platform/issues/194) — *TIMMERFLOTTE humidity sensor*: TIMMERFLOTTE temperature works (split-device merging), humidity needs separate device support — not yet implemented.
 - New device support requests (STARKVIND quirks, VINDYKSTRA air quality, Matter device coverage, etc.) are out of scope for this fork's reliability focus.
 
@@ -85,6 +90,16 @@ Or manually:
 
 To test with mock devices, enter `mock` as the IP address.
 
+## Options
+
+Open **Configure** on the integration to change these. Saving no longer asks you to press the hub's action button: as long as the hub address is unchanged and the stored token still works, the options are saved straight away.
+
+| Option | Default | What it does |
+|--------|---------|--------------|
+| **Platforms to import** | all seven | Which device types get entities. Clearing a platform hides its existing entities and, where a device has nothing left, the device itself. They are disabled rather than deleted, so renames, area assignments and history survive; re-select the platform and they come back with the same entity IDs. A device that still has an entity on a selected platform stays visible, so switching off Sensors does not take a motion sensor or a metering plug with it. Anything you disabled by hand is never touched. |
+| **Hide Device Set Bulbs** | on | Hides the hub's bulb groups, which otherwise duplicate the individual lights |
+| **Power sensor push throttle** | 60s | Minimum interval between recorder writes for the high-frequency push sensors. This is a floor, not an exact interval. Set 0 to disable. |
+
 ## Bug Reports & Feature Requests
 
 When opening an issue, please include a device data dump, it helps enormously:
@@ -100,6 +115,8 @@ See [detailed instructions](docs/dump-data.md).
 See [Releases](https://github.com/nrbrt/dirigera_platform/releases) for a full changelog.
 
 ### Recent
+
+- **v0.3.17** (2026-08-27) Choose which platforms to import (issue [#47](https://github.com/nrbrt/dirigera_platform/issues/47), upstream [#150](https://github.com/sanjoyg/dirigera_platform/issues/150)). Running Matter and Dirigera side by side gives you every device twice, because both integrations import the same hardware; scenes are the exception, since Matter does not sync them. A new "Platforms to import" multi-select decides which platforms this integration sets up, with everything selected by default so upgrading changes nothing until you touch it. Three things needed fixing underneath. Setup forwarded a hardcoded platform list while unload resolved that same constant, which drift apart as soon as the list depends on an option: a reload unloads first, and by then the new selection is already stored, so the platform you just switched off would never be unloaded and its entities would linger as orphans. Setup now stores the resolved list on the entry and unload reads it back. Not forwarding a platform also does not remove its entities: they stay in the registry as unavailable with `restored: true` and still show up in every entity picker, so they are now disabled instead. And disabling entities was not enough either, because Home Assistant keeps a device for as long as it has entities, so a filtered-out plug still sat in the device list next to its Matter twin; a device is now hidden too, but only when every one of its entities is on a deselected platform, so a motion sensor or a metering plug that spans two platforms stays put. Everything is disabled rather than deleted, which keeps renames, areas and history intact through a round trip. Saving options no longer re-runs the hub pairing: the options screen opens pre-filled and, when the address is unchanged and the stored token still answers, saves without asking for the action button. Verified on a live hub with 27 devices and 37 entities. Thanks to @Edocsyl for the report, for linking the upstream issue, and for testing it twice.
 
 - **v0.3.16** (2026-08-23) Fix: a transient dip on the energy totals no longer inflates long-term statistics permanently (issue [#45](https://github.com/nrbrt/dirigera_platform/issues/45)). `total_energy_consumed` is a `TOTAL_INCREASING` sensor, so Home Assistant reads any decrease as a counter reset and adds the whole total to the statistics again. On a GRILLPLATS the value dipped from 5.982 kWh to 5 kWh for 137 ms after a hub reconnect and then corrected itself, which injected the full total three times in two weeks; on a plug sitting at 263 kWh one dip would inject 263 kWh. A decreasing `totalEnergyConsumed` or `energyConsumedAtLastReset` is now only written when the device also reports a newer `timeOfLastEnergyReset`, or when the value drops to zero, which is how a genuine reset is reported. As a safety valve, a lower value that persists for three consecutive updates is accepted anyway, so a reset the hub fails to timestamp can never freeze the sensor. Thanks to @0xmachos for tracing this all the way into the statistics table.
 - **v0.3.15** (2026-08-09) Fix: the power sensor push throttle dropped the final value instead of deferring it (issue [#44](https://github.com/nrbrt/dirigera_platform/issues/44)). A push arriving inside the throttle window was discarded, which is harmless while pushes keep coming but not when the device goes quiet right after one: switching a plug off stopped the `electricalSensor` events, so the last value never reached Home Assistant and the off-clamp that forces the power sensors to 0 was never applied. Until v0.3.12 the HA poll masked this by writing the cached value anyway; v0.3.12 disabled that poll, so the regression window is v0.3.12 through v0.3.14. A throttled push now schedules a trailing write at the end of the window, so the final value always lands while the write rate stays capped. Thanks to @Cornitus for the screenshot that pinpointed it.

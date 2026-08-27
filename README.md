@@ -40,7 +40,7 @@ If you arrived here from an open issue on [sanjoyg/dirigera_platform](https://gi
 
 ### In progress (on a branch, not released)
 
-- [#46](https://github.com/nrbrt/dirigera_platform/issues/46), *Zigbee2MQTT naming and defaults for plug sensors*: on branch `feature/entity-filtering-and-plug-naming`. Not yet verified on metering hardware, so it stays unreleased until it has been.
+- [#46](https://github.com/nrbrt/dirigera_platform/issues/46), *Zigbee2MQTT naming and defaults for plug sensors*: on branch `feature/entity-filtering-and-plug-naming`. Plug sensors get the short measurement names and the matching icons (`Power`, `Energy`, `Voltage`, `Current`, `Energy at last reset`), and `unique_id` is deliberately left alone so no existing entity loses its identity or its recorder history. All of them stay enabled by default except the last-reset helper: a fresh Silvercrest plug on Zigbee2MQTT shows Energy, Power, Voltage and Current all four reporting, and Z2M has no counterpart for the last-reset value at all. An earlier version of this branch registered Current and Voltage disabled as well, which contradicted the layout it set out to match; the reporter caught that himself. Not yet verified on metering hardware, so it stays unreleased until it has been.
 
 ### Not addressed (out of scope or different root cause)
 

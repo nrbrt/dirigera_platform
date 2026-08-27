@@ -25,13 +25,13 @@ If you arrived here from an open issue on [sanjoyg/dirigera_platform](https://gi
 | Upstream issue | Title | Fixed in |
 |----------------|-------|----------|
 | [#155](https://github.com/sanjoyg/dirigera_platform/issues/155) | Integration failed setup on 2025.6.0 | v0.2.7 (`ConfigEntryNotReady` retry + deprecated `hass.loop` migration) |
-| [#160](https://github.com/sanjoyg/dirigera_platform/issues/160) | TRADFRI on/off switch — not properly integrated | v0.2.6 (multi-button scene-creation per controller half) |
+| [#160](https://github.com/sanjoyg/dirigera_platform/issues/160) | TRADFRI on/off switch - not properly integrated | v0.2.6 (multi-button scene-creation per controller half) |
 | [#165](https://github.com/sanjoyg/dirigera_platform/issues/165) | VALLHORN motion sensor not providing illuminance | v0.2.1 (separate light sensor entities with lux conversion) |
 | [#168](https://github.com/sanjoyg/dirigera_platform/issues/168) | Disconnected due to inactivity | v0.2.11/12 (application-level WebSocket keepalive) |
 | [#175](https://github.com/sanjoyg/dirigera_platform/issues/175) | MotionSensor fails setup when batteryPercentage is missing | v0.2.1 (`batteryPercentage` made optional) |
-| [#177](https://github.com/sanjoyg/dirigera_platform/issues/177) | Styrbar 4-button — no events | v0.2.6 (per-button scene creation) |
+| [#177](https://github.com/sanjoyg/dirigera_platform/issues/177) | Styrbar 4-button - no events | v0.2.6 (per-button scene creation) |
 | [#183](https://github.com/sanjoyg/dirigera_platform/issues/183) | MYGGSPRAY motion sensor not visible | upstream 2.7.1 + v0.2.16 (battery-sensor dedup unique to this fork) |
-| [#184](https://github.com/sanjoyg/dirigera_platform/issues/184) | BILRESA dual button — no activities | v0.2.6 (dual-button to controller map + scenes) |
+| [#184](https://github.com/sanjoyg/dirigera_platform/issues/184) | BILRESA dual button - no activities | v0.2.6 (dual-button to controller map + scenes) |
 | [#195](https://github.com/sanjoyg/dirigera_platform/issues/195) | Lights can't be used as automation triggers | v0.2.9 (merged upstream PR #197) |
 | [#198](https://github.com/sanjoyg/dirigera_platform/issues/198) | `ikea_bulb_device_set` has no attribute 'entity' | v0.2.8 (merged upstream PR #196) |
 | [#152](https://github.com/sanjoyg/dirigera_platform/issues/152) | IKEA Inspelning (plug with power sensor) | v0.2.5 (outlet + electricalSensor split-device merge) |
@@ -40,12 +40,12 @@ If you arrived here from an open issue on [sanjoyg/dirigera_platform](https://gi
 
 ### In progress (on a branch, not released)
 
-- [#46](https://github.com/nrbrt/dirigera_platform/issues/46) — *Zigbee2MQTT naming and defaults for plug sensors*: on branch `feature/entity-filtering-and-plug-naming`. Not yet verified on metering hardware, so it stays unreleased until it has been.
+- [#46](https://github.com/nrbrt/dirigera_platform/issues/46), *Zigbee2MQTT naming and defaults for plug sensors*: on branch `feature/entity-filtering-and-plug-naming`. Not yet verified on metering hardware, so it stays unreleased until it has been.
 
 ### Not addressed (out of scope or different root cause)
 
-- [#143](https://github.com/sanjoyg/dirigera_platform/issues/143) — *Power factor for Inspelning*: the Dirigera API does not expose `currentPowerFactor`; would require a user-configurable correction factor + derived sensor, not a code fix.
-- [#194](https://github.com/sanjoyg/dirigera_platform/issues/194) — *TIMMERFLOTTE humidity sensor*: TIMMERFLOTTE temperature works (split-device merging), humidity needs separate device support — not yet implemented.
+- [#143](https://github.com/sanjoyg/dirigera_platform/issues/143), *Power factor for Inspelning*: the Dirigera API does not expose `currentPowerFactor`; would require a user-configurable correction factor + derived sensor, not a code fix.
+- [#194](https://github.com/sanjoyg/dirigera_platform/issues/194), *TIMMERFLOTTE humidity sensor*: TIMMERFLOTTE temperature works (split-device merging), humidity needs separate device support: not yet implemented.
 - New device support requests (STARKVIND quirks, VINDYKSTRA air quality, Matter device coverage, etc.) are out of scope for this fork's reliability focus.
 
 ## Supported Devices
@@ -136,19 +136,19 @@ See [Releases](https://github.com/nrbrt/dirigera_platform/releases) for a full c
 - **v0.3.1** (2026-06-12) Fix: clamp power/amps readings to 0 while an outlet is off (issue [#36](https://github.com/nrbrt/dirigera_platform/issues/36)).
 - **v0.3.0** (2026-06-12) Reliability and lifecycle release: single update listener, a real `unload_ok` and a per-entry event listener on unload; visible event-processing errors and an interruptible reconnect retry; hub-side scene updates now propagate; light fixes (stale color temperature, brightness clamp, HS dedupe); VOC index device class, controller push updates and air-purifier cleanups; energy-timestamp sensor repairs; cover/blind-level and fan-state crash fixes; serialized concurrent multi-entity device updates (issue [#34](https://github.com/nrbrt/dirigera_platform/issues/34)).
 - **v0.2.18 to 0.2.21** (2026-05-25 to 2026-06-06) Incremental fixes; see [Releases](https://github.com/nrbrt/dirigera_platform/releases).
-- **v0.2.17** (2026-05-19) — Fix: GRILLPLATS / TOFSMYGGA energy data missing on runtime-added plugs (issue [#31](https://github.com/nrbrt/dirigera_platform/issues/31)). When a smart plug is added to the Dirigera hub while the HA integration is already running, the ADD-event discovery path constructed the outlet directly via `dict_to_outlet()` and bypassed the energy-attribute merge from the linked `electricalSensor` device. Result: `current_active_power`, `total_energy_consumed`, voltage and amps were missing until an integration restart. The runtime-discovery path now uses `get_outlet_by_id()`, applying the same merge used at integration startup. Falls back to raw payload with a warning log if the lookup fails.
-- **v0.2.16** (2026-04-27) — Battery sensor fixes (PRs #27, #28, #29 by @ermitovski):
+- **v0.2.17** (2026-05-19). Fix: GRILLPLATS / TOFSMYGGA energy data missing on runtime-added plugs (issue [#31](https://github.com/nrbrt/dirigera_platform/issues/31)). When a smart plug is added to the Dirigera hub while the HA integration is already running, the ADD-event discovery path constructed the outlet directly via `dict_to_outlet()` and bypassed the energy-attribute merge from the linked `electricalSensor` device. Result: `current_active_power`, `total_energy_consumed`, voltage and amps were missing until an integration restart. The runtime-discovery path now uses `get_outlet_by_id()`, applying the same merge used at integration startup. Falls back to raw payload with a warning log if the lookup fails.
+- **v0.2.16** (2026-04-27). Battery sensor fixes (PRs #27, #28, #29 by @ermitovski):
   - Fix: avoid duplicate `Battery Percentage` entity on MYGGSPRAY split-devices. The hub exposes MYGGSPRAY as `occupancySensor` + `lightSensor` sharing a `relation_id`, both reporting `battery_percentage`; the duplicate `*_battery_percentage_2` entity is now suppressed by binding the battery diagnostic to the motion side only. Pre-existing `_2` entities become orphaned (state `unavailable`) and can be deleted from the device page.
   - Fix: de-duplicate the controller battery diagnostic on multi-button controllers (BILRESA, SOMRIG, RODRET, STYRBAR, ...). Group controllers by `relation_id` and elect a single primary that becomes the HA entity; secondary halves rebind to the primary in the device registry so `remotePressEvents` still resolve to a registered entity. Multi-button device-trigger generation is preserved.
   - Feature: emit `battery_percentage` diagnostic when a sensor (`waterSensor`, `motionSensor`, `occupancySensor`, `openCloseSensor`) is paired with HA already running. The WebSocket-driven discovery path now mirrors the static startup path, so freshly paired BADRING / motion / open-close sensors show the battery diagnostic without a HA restart.
-- **v0.2.15** (2026-04-23) — Fix: guard `_color_mode` writes against unsupported modes on brightness-only lights (TRÅDFRI Driver). Prevents `HomeAssistantError: "... set to unsupported color mode hs"` after scene activation. (PR #26 by @charleslemaux)
-- **v0.2.14** (2026-04-20) — Fix: proper split-device entity naming using has_entity_name (PR #25 by @crowbarz)
-- **v0.2.13** (2026-04-20) — Fix: split-device entity naming — secondary entities (e.g. MYGGSPRAY illuminance) now inherit the user-configured name from the primary entity
-- **v0.2.11/12** (2026-04-17) — Fix: application-level WebSocket keepalive to prevent Dirigera hub "disconnected due to inactivity" (issue #12)
-- **v0.2.10** (2026-04-16) — Fix: honor 10s sleep between listener reconnects; add on_open/on_close diagnostics for WebSocket disconnect debugging
-- **v0.2.9** (2026-04-15) — Feature: light device triggers — turned_on/turned_off automations (upstream PR #197)
-- **v0.2.8** (2026-04-15) — Fix: `ikea_bulb_device_set` registry_entry registration (upstream PR #196)
-- **v0.2.7** (2026-04-13) — Fix: replace deprecated `hass.loop` with `asyncio.get_event_loop()` (HA 2026.1+ compatibility)
-- **v0.2.6** (2026-04-04) — BILRESA dual button support; consistent device naming for split-devices
-- **v0.2.5** (2026-04-04) — Split-device plug support (GRILLPLATS, TOFSMYGGA)
-- **v0.2.0** (2026-03-27) — Split-device merging framework; TIMMERFLOTTE support
+- **v0.2.15** (2026-04-23). Fix: guard `_color_mode` writes against unsupported modes on brightness-only lights (TRÅDFRI Driver). Prevents `HomeAssistantError: "... set to unsupported color mode hs"` after scene activation. (PR #26 by @charleslemaux)
+- **v0.2.14** (2026-04-20). Fix: proper split-device entity naming using has_entity_name (PR #25 by @crowbarz)
+- **v0.2.13** (2026-04-20). Fix: split-device entity naming, where secondary entities (e.g. MYGGSPRAY illuminance) now inherit the user-configured name from the primary entity
+- **v0.2.11/12** (2026-04-17). Fix: application-level WebSocket keepalive to prevent Dirigera hub "disconnected due to inactivity" (issue #12)
+- **v0.2.10** (2026-04-16). Fix: honor 10s sleep between listener reconnects; add on_open/on_close diagnostics for WebSocket disconnect debugging
+- **v0.2.9** (2026-04-15). Feature: light device triggers for turned_on/turned_off automations (upstream PR #197)
+- **v0.2.8** (2026-04-15). Fix: `ikea_bulb_device_set` registry_entry registration (upstream PR #196)
+- **v0.2.7** (2026-04-13). Fix: replace deprecated `hass.loop` with `asyncio.get_event_loop()` (HA 2026.1+ compatibility)
+- **v0.2.6** (2026-04-04). BILRESA dual button support; consistent device naming for split-devices
+- **v0.2.5** (2026-04-04). Split-device plug support (GRILLPLATS, TOFSMYGGA)
+- **v0.2.0** (2026-03-27). Split-device merging framework; TIMMERFLOTTE support

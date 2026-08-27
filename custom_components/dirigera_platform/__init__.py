@@ -18,7 +18,7 @@ from homeassistant.const import CONF_IP_ADDRESS, CONF_TOKEN, Platform
 # Import the device class from the component that you want to support
 from homeassistant.core import HomeAssistant
 import homeassistant.helpers.config_validation as cv
-from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from .const import (
     DOMAIN,
@@ -90,10 +90,58 @@ def sync_platform_entity_registry(hass, entry, platforms) -> None:
             registry.async_update_entity(reg_entry.entity_id, disabled_by=None)
             re_enabled += 1
 
-    if disabled or re_enabled:
+    dev_disabled, dev_re_enabled = _sync_device_registry(hass, entry, registry, wanted)
+
+    if disabled or re_enabled or dev_disabled or dev_re_enabled:
         logger.info(
-            "Platform filter: disabled %d entities, re-enabled %d", disabled, re_enabled
+            "Platform filter: disabled %d entities, re-enabled %d; "
+            "disabled %d devices, re-enabled %d",
+            disabled, re_enabled, dev_disabled, dev_re_enabled,
         )
+
+
+def _sync_device_registry(hass, entry, entity_reg, wanted) -> tuple[int, int]:
+    """Hide devices whose every entity belongs to a platform we no longer import.
+
+    Disabling the entities alone was not enough, and that is what #47 actually
+    asked for. Home Assistant keeps a device in the device registry as long as it
+    has entities, disabled or not, so a filtered-out plug still shows up in the
+    device list. The reporter runs the same hardware through Matter as well, so
+    what he sees is a duplicate DEVICE, and disabling its entities leaves that
+    duplicate exactly where it was. He had to delete the devices by hand.
+
+    A device is only hidden when EVERY one of its entities sits on a platform
+    that is not selected. That matters because one Dirigera device can span
+    several platforms: a plug produces both a switch and its energy sensors, so
+    deselecting sensors must not take the whole plug away.
+
+    Disabled and not deleted, for the same reason as the entities: deleting a
+    device entry discards its name, its area and its via_device links, and
+    re-selecting the platform cannot restore them. And as with the entities, a
+    device the user disabled by hand keeps disabled_by USER and is left alone.
+    """
+    device_reg = dr.async_get(hass)
+    disabled = 0
+    re_enabled = 0
+
+    for device in dr.async_entries_for_config_entry(device_reg, entry.entry_id):
+        entities = er.async_entries_for_device(
+            entity_reg, device.id, include_disabled_entities=True
+        )
+        if not entities:
+            # No entities at all: nothing to base a decision on, so leave it be.
+            continue
+        keep = any(e.domain in wanted for e in entities)
+        if not keep and device.disabled_by is None:
+            device_reg.async_update_device(
+                device.id, disabled_by=dr.DeviceEntryDisabler.INTEGRATION
+            )
+            disabled += 1
+        elif keep and device.disabled_by == dr.DeviceEntryDisabler.INTEGRATION:
+            device_reg.async_update_device(device.id, disabled_by=None)
+            re_enabled += 1
+
+    return disabled, re_enabled
 
 # Validation of the user's configuration
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(

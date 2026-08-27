@@ -153,9 +153,10 @@ class _FakeRegistryEntryDisabler:
 
 
 class _FakeEntry:
-    def __init__(self, entity_id, disabled_by=None):
+    def __init__(self, entity_id, disabled_by=None, device_id=None):
         self.entity_id = entity_id
         self.disabled_by = disabled_by
+        self.device_id = device_id
 
     @property
     def domain(self):
@@ -174,29 +175,71 @@ class _FakeRegistry:
                 e.disabled_by = changes.get("disabled_by")
 
 
+class _FakeDeviceEntryDisabler:
+    INTEGRATION = "integration"
+    USER = "user"
+
+
+class _FakeDevice:
+    def __init__(self, device_id, disabled_by=None):
+        self.id = device_id
+        self.disabled_by = disabled_by
+
+
+class _FakeDeviceRegistry:
+    def __init__(self, devices):
+        self.devices = devices
+        self.writes = []
+
+    def async_update_device(self, device_id, **changes):
+        self.writes.append((device_id, changes.get("disabled_by")))
+        for d in self.devices:
+            if d.id == device_id:
+                d.disabled_by = changes.get("disabled_by")
+
+
 def _load_sync_function(registry):
     """Exec the real sync_platform_entity_registry against a fake registry."""
-    node = next(
+    names = ("sync_platform_entity_registry", "_sync_device_registry")
+    nodes = [
         n for n in TREE.body
-        if isinstance(n, ast.FunctionDef) and n.name == "sync_platform_entity_registry"
-    )
+        if isinstance(n, ast.FunctionDef) and n.name in names
+    ]
+    assert len(nodes) == 2, "expected both sync functions in __init__.py"
     er_stub = type("er", (), {
         "async_get": staticmethod(lambda hass: registry),
         "async_entries_for_config_entry": staticmethod(lambda reg, entry_id: reg.entries),
         "RegistryEntryDisabler": _FakeRegistryEntryDisabler,
     })
+    device_registry = getattr(registry, "device_registry", None) or _FakeDeviceRegistry([])
+    dr_stub = type("dr", (), {
+        "async_get": staticmethod(lambda hass: device_registry),
+        "async_entries_for_config_entry": staticmethod(
+            lambda reg, entry_id: reg.devices
+        ),
+        "DeviceEntryDisabler": _FakeDeviceEntryDisabler,
+    })
+    er_stub.async_entries_for_device = staticmethod(
+        lambda reg, device_id, include_disabled_entities=False: [
+            e for e in reg.entries if getattr(e, "device_id", None) == device_id
+        ]
+    )
     logged = []
     ns = {
         "er": er_stub,
+        "dr": dr_stub,
+        "any": any,
+        "tuple": tuple,
         "logger": type("L", (), {"info": staticmethod(lambda *a: logged.append(a))}),
         "set": set,
     }
-    exec(compile(ast.Module(body=[node], type_ignores=[]), INIT, "exec"), ns)
+    exec(compile(ast.Module(body=nodes, type_ignores=[]), INIT, "exec"), ns)
     return ns["sync_platform_entity_registry"]
 
 
-def _run(entries, selected):
+def _run(entries, selected, devices=None):
     registry = _FakeRegistry(entries)
+    registry.device_registry = _FakeDeviceRegistry(devices or [])
     fn = _load_sync_function(registry)
     platforms = [_Platform(name) for name in selected]
     fn(object(), type("E", (), {"entry_id": "abc"})(), platforms)
@@ -242,3 +285,79 @@ def test_setup_hides_ghosts_before_forwarding_platforms():
     """
     src = _function_source("async_setup_entry")
     assert src.index("sync_platform_entity_registry(") < src.index("async_forward_entry_setups(")
+
+
+# --- #47, tweede ronde: de klacht ging over DEVICES, niet over entiteiten -----
+#
+# De entiteiten uitzetten was niet genoeg en de melder liet dat ook zien: hij
+# moest alle apparaten met de hand uit de integratie verwijderen voor het filter
+# effect had. Home Assistant houdt een device in het register zolang het
+# entiteiten heeft, uitgeschakeld of niet, dus een weggefilterde stekker stond
+# nog gewoon in de apparatenlijst. En juist dubbele APPARATEN naast Matter zijn
+# waar de issue over gaat.
+
+
+def test_a_device_with_only_deselected_entities_is_disabled():
+    """De kern van de klacht: het apparaat zelf moet uit de lijst verdwijnen."""
+    reg = _run(
+        [_FakeEntry("switch.plug", device_id="dev1")],
+        ["scene"],
+        devices=[_FakeDevice("dev1")],
+    )
+    assert reg.device_registry.writes == [("dev1", "integration")]
+
+
+def test_a_device_spanning_two_platforms_survives_losing_one():
+    """Een stekker levert switch EN sensor. Sensors uitzetten mag de stekker
+    niet meenemen, anders verliest de gebruiker het apparaat dat hij wilde
+    houden. Dit is de fout die het makkelijkst te maken is."""
+    reg = _run(
+        [
+            _FakeEntry("switch.plug", device_id="dev1"),
+            _FakeEntry("sensor.plug_energy", device_id="dev1"),
+        ],
+        ["switch"],
+        devices=[_FakeDevice("dev1")],
+    )
+    assert reg.device_registry.writes == [], "device met een geselecteerd platform moet blijven"
+    assert reg.writes == [("sensor.plug_energy", "integration")], "alleen de sensor gaat uit"
+
+
+def test_reselecting_brings_the_device_back():
+    reg = _run(
+        [_FakeEntry("switch.plug", device_id="dev1")],
+        ["switch"],
+        devices=[_FakeDevice("dev1", "integration")],
+    )
+    assert reg.device_registry.writes == [("dev1", None)]
+
+
+def test_a_user_disabled_device_is_never_touched():
+    """Wat de gebruiker zelf heeft uitgezet blijft van hem."""
+    reg = _run(
+        [_FakeEntry("switch.plug", device_id="dev1")],
+        ["scene"],
+        devices=[_FakeDevice("dev1", "user")],
+    )
+    assert reg.device_registry.writes == []
+
+
+def test_a_device_without_entities_is_left_alone():
+    """Geen entiteiten betekent geen grond om te oordelen; niet aanraken."""
+    reg = _run([], ["scene"], devices=[_FakeDevice("dev_leeg")])
+    assert reg.device_registry.writes == []
+
+
+def test_running_twice_writes_no_device_the_second_time():
+    """Een setup die niets verandert mag geen registerschrijfacties doen."""
+    entries = [_FakeEntry("switch.plug", device_id="dev1")]
+    devices = [_FakeDevice("dev1")]
+    registry = _FakeRegistry(entries)
+    registry.device_registry = _FakeDeviceRegistry(devices)
+    fn = _load_sync_function(registry)
+    platforms = [_Platform("scene")]
+    entry = type("E", (), {"entry_id": "abc"})()
+    fn(object(), entry, platforms)
+    first = list(registry.device_registry.writes)
+    fn(object(), entry, platforms)
+    assert registry.device_registry.writes == first, "tweede run moet niets schrijven"

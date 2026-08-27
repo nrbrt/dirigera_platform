@@ -35,6 +35,45 @@ HUB_SCHEMA = vol.Schema({
 NULL_SCHEMA = vol.Schema({})
 
 
+def options_schema(data: Dict[str, Any]) -> vol.Schema:
+    """HUB_SCHEMA with the entry's current values filled in.
+
+    The options screen used to show an empty IP field, so every visit meant
+    typing the address again even when nothing about the hub had changed.
+    """
+    return vol.Schema({
+        vol.Required(CONF_IP_ADDRESS, default=data.get(CONF_IP_ADDRESS, "")): cv.string,
+        vol.Optional(
+            CONF_HIDE_DEVICE_SET_BULBS,
+            default=data.get(CONF_HIDE_DEVICE_SET_BULBS, True),
+        ): cv.boolean,
+        vol.Optional(
+            CONF_POWER_PUSH_THROTTLE,
+            default=data.get(CONF_POWER_PUSH_THROTTLE, DEFAULT_POWER_PUSH_THROTTLE),
+        ): vol.All(vol.Coerce(int), vol.Range(min=0)),
+        vol.Optional(
+            CONF_ENABLED_PLATFORMS,
+            default=data.get(CONF_ENABLED_PLATFORMS, DEFAULT_ENABLED_PLATFORMS),
+        ): cv.multi_select(PLATFORM_LABELS),
+    })
+
+
+def token_still_works(ip: str, token: str) -> bool:
+    """Whether the stored token still authenticates against the hub.
+
+    Runs in the executor: it does blocking HTTP. get_scenes() is the smallest
+    authenticated call the integration already makes during setup.
+    """
+    try:
+        from .dirigera_lib_patch import HubX
+
+        HubX(token, ip).get_scenes()
+        return True
+    except Exception as ex:  # noqa: BLE001 - any failure means: pair again
+        logger.debug("Stored token did not work, falling back to pairing: %s", ex)
+        return False
+
+
 def get_dirigera_token_step_one(ip_address):
     logger.debug("In generate token step one ")
     ALPHABET = f"_-~.{string.ascii_letters}{string.digits}"
@@ -186,6 +225,28 @@ class OptionsFlowHandler(config_entries.OptionsFlowWithConfigEntry):
                 errors["base"] = "ip_not_specified"
             else:
                 try:
+                    # Re-pairing only exists to mint a NEW token. Changing an
+                    # option does not invalidate the one already stored, so when
+                    # the hub address is unchanged and that token still answers,
+                    # skip the pairing steps entirely. Raised by Edocsyl in #47:
+                    # every visit to this screen asked for the hub button again,
+                    # which makes a setting you want to try a few times
+                    # needlessly painful. Any doubt falls back to pairing.
+                    stored = dict(self.config_entry.data)
+                    if (
+                        self.ip != "mock"
+                        and self.ip == stored.get(CONF_IP_ADDRESS)
+                        and stored.get(CONF_TOKEN)
+                        and await core.async_get_hass().async_add_executor_job(
+                            token_still_works, self.ip, stored[CONF_TOKEN]
+                        )
+                    ):
+                        logger.info(
+                            "Hub unchanged and stored token still valid: "
+                            "saving options without re-pairing"
+                        )
+                        return self._store(stored[CONF_TOKEN])
+
                     logger.debug("Moving to second step....")
                     if self.ip == "mock":
                         logger.warning(
@@ -207,8 +268,32 @@ class OptionsFlowHandler(config_entries.OptionsFlowWithConfigEntry):
                     errors["base"] = "hub_connection_fail"
 
         return self.async_show_form(
-            step_id="init", data_schema=HUB_SCHEMA, errors=errors
+            step_id="init", data_schema=options_schema(dict(self.config_entry.data)), errors=errors
         )
+
+    def _store(self, token: str) -> Dict[str, Any]:
+        """Write the options onto the entry and finish the flow.
+
+        Shared by the pairing path and by the short-circuit that skips it, so
+        both end up writing exactly the same entry data.
+        """
+        data = {
+            CONF_IP_ADDRESS: self.ip,
+            CONF_TOKEN: token,
+            CONF_HIDE_DEVICE_SET_BULBS: self.hide_device_set_bulbs,
+            CONF_POWER_PUSH_THROTTLE: getattr(
+                self, "power_push_throttle", DEFAULT_POWER_PUSH_THROTTLE
+            ),
+            CONF_ENABLED_PLATFORMS: getattr(
+                self, "enabled_platforms", DEFAULT_ENABLED_PLATFORMS
+            ),
+        }
+        title = "IKEA Dirigera Hub : {}".format(self.ip)
+        self.hass.config_entries.async_update_entry(
+            self.config_entry, data=data, title=title
+        )
+        return self.async_create_entry(title=title, data=data)
+
 
     async def async_step_action(
         self, user_input: Dict[str, Any] = None

@@ -55,6 +55,18 @@ DEFAULT_ENABLED_PLATFORMS = list(ALL_PLATFORMS)
 #
 # Stored in entry.data like the options above. A missing key means "import
 # everything", so entries created before this option behave exactly as before.
+# Not to be confused with #47, which reads like the same request and is not.
+# There are two different causes of duplicate devices:
+#
+#   #47  the hub acts as a Matter Bridge and exposes its ZIGBEE devices to
+#        Matter ecosystems, so everything shows up twice except scenes. Those
+#        devices carry no marker, so this option does nothing for that case;
+#        CONF_ENABLED_PLATFORMS is the handle there.
+#   #49  the Matter over Thread devices are commissioned into HA directly, so
+#        only those duplicate. That is the case this option covers.
+#
+# The two are complementary and neither replaces the other. This is also why
+# the user-facing label says "Matter over Thread" rather than "Matter".
 CONF_EXCLUDE_MATTER = "exclude_matter_devices"
 DEFAULT_EXCLUDE_MATTER = False
 

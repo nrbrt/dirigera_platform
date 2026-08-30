@@ -28,7 +28,7 @@ from homeassistant.const import CONF_IP_ADDRESS, CONF_TOKEN, UnitOfTime, CONCENT
 from homeassistant.core import HomeAssistantError
 from homeassistant.helpers.entity import EntityCategory
 
-from .const import DOMAIN, PLATFORM, DISCOVERY_COORDINATOR, CONF_POWER_PUSH_THROTTLE, DEFAULT_POWER_PUSH_THROTTLE
+from .const import CONF_EXCLUDE_MATTER, DEFAULT_EXCLUDE_MATTER, DOMAIN, PLATFORM, DISCOVERY_COORDINATOR, CONF_POWER_PUSH_THROTTLE, DEFAULT_POWER_PUSH_THROTTLE
 from .hub_event_listener import hub_event_listener, registry_entry
 
 logger = logging.getLogger("custom_components.dirigera_platform")
@@ -43,7 +43,11 @@ async def async_setup_entry(
 
     config = hass.data[DOMAIN][config_entry.entry_id]
 
-    hub = HubX(config[CONF_TOKEN], config[CONF_IP_ADDRESS])
+    hub = HubX(
+        config[CONF_TOKEN],
+        config[CONF_IP_ADDRESS],
+        exclude_matter=config.get(CONF_EXCLUDE_MATTER, DEFAULT_EXCLUDE_MATTER),
+    )
 
     platform: ikea_gateway = hass.data[DOMAIN][config_entry.entry_id]["gateway"]
 

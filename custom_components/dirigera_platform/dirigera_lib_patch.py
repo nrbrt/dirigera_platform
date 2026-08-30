@@ -4,6 +4,8 @@ from typing import Any, Dict, List, Optional
 from dirigera import Hub
 
 from dirigera.devices.device import Attributes, Device
+
+from .const import MATTER_ATTRIBUTE_KEYS
 from dirigera.devices.outlet import Outlet, dict_to_outlet
 from dirigera.devices.environment_sensor import EnvironmentSensor, dict_to_environment_sensor
 from dirigera.hub.abstract_smart_home_hub import AbstractSmartHomeHub
@@ -13,11 +15,35 @@ import logging
 logger = logging.getLogger("custom_components.dirigera_platform")
 
 
+def is_matter_device(device: dict) -> bool:
+    """True when the hub marks this device as one it commissioned over Matter.
+
+    Keyed on the presence of the Matter commissioning attributes rather than
+    their values, because the hub blanks the values out. See the notes on
+    MATTER_ATTRIBUTE_KEYS in const.py for what was measured.
+
+    Fails closed on purpose: anything we cannot positively identify as Matter
+    is reported as not-Matter, so it keeps being imported. Losing a device
+    silently is worse than importing one duplicate.
+    """
+    attributes = device.get("attributes") or {}
+    return any(key in attributes for key in MATTER_ATTRIBUTE_KEYS)
+
+
 class HubX(Hub):
     def __init__(
-        self, token: str, ip_address: str, port: str = "8443", api_version: str = "v1"
+        self,
+        token: str,
+        ip_address: str,
+        port: str = "8443",
+        api_version: str = "v1",
+        exclude_matter: bool = False,
     ) -> None:
         super().__init__(token, ip_address, port, api_version)
+        # issue #49: when set, devices the hub commissioned over Matter are
+        # dropped from every device lookup. Defaults to off so nothing changes
+        # for anyone who does not ask for it.
+        self._exclude_matter = exclude_matter
         # issue #38 punt 1: batch-cache voor /devices. Tijdens make_devices() roepen
         # ~10 get_X-methoden elk self.get("/devices") aan -> 10x de volledige device-lijst
         # over een verse TLS-handshake. Met een actieve batch fetcht alleen de eerste; de
@@ -31,9 +57,31 @@ class HubX(Hub):
         if route == "/devices" and self._devices_cache_active:
             if self._devices_cache is None:
                 self._devices_fetch_count += 1
-                self._devices_cache = super().get(route)
+                self._devices_cache = self._without_matter(super().get(route))
             return self._devices_cache
-        return super().get(route)
+        result = super().get(route)
+        if route == "/devices":
+            return self._without_matter(result)
+        return result
+
+    def _without_matter(self, devices):
+        """Drop Matter devices from a /devices response when the option is on.
+
+        This sits in get() rather than in the individual get_X methods because
+        every one of them, in this class and in the library, funnels through
+        self.get("/devices"). One filter here covers all of them.
+        """
+        if not self._exclude_matter or not isinstance(devices, list):
+            return devices
+        return [device for device in devices if not is_matter_device(device)]
+
+    def is_excluded_matter_device(self, device: dict) -> bool:
+        """Whether this single device should be skipped because of issue #49.
+
+        Runtime discovery fetches one device at a time via /devices/<id>, which
+        does not pass through the list filter above, so that path asks here.
+        """
+        return self._exclude_matter and is_matter_device(device)
 
     def begin_devices_batch(self) -> None:
         """Start het coalescen van /devices-fetches (één fetch voor de hele make_devices-run)."""

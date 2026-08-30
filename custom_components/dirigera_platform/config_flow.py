@@ -17,6 +17,8 @@ from .const import (
     CONF_POWER_PUSH_THROTTLE,
     CONF_ENABLED_PLATFORMS,
     DEFAULT_ENABLED_PLATFORMS,
+    CONF_EXCLUDE_MATTER,
+    DEFAULT_EXCLUDE_MATTER,
     PLATFORM_LABELS,
     DEFAULT_POWER_PUSH_THROTTLE,
 )
@@ -29,7 +31,10 @@ HUB_SCHEMA = vol.Schema({
     vol.Optional(CONF_POWER_PUSH_THROTTLE, default=DEFAULT_POWER_PUSH_THROTTLE): vol.All(vol.Coerce(int), vol.Range(min=0)),
     # Issue #47: pick which platforms to import. Everything is selected by
     # default, so a user who never touches this sees no change.
-    vol.Optional(CONF_ENABLED_PLATFORMS, default=DEFAULT_ENABLED_PLATFORMS): cv.multi_select(PLATFORM_LABELS)
+    vol.Optional(CONF_ENABLED_PLATFORMS, default=DEFAULT_ENABLED_PLATFORMS): cv.multi_select(PLATFORM_LABELS),
+    # Issue #49: skip the devices the hub commissioned over Matter, for
+    # people who already import those through the Matter integration.
+    vol.Optional(CONF_EXCLUDE_MATTER, default=DEFAULT_EXCLUDE_MATTER): cv.boolean,
     })
 
 NULL_SCHEMA = vol.Schema({})
@@ -55,6 +60,10 @@ def options_schema(data: Dict[str, Any]) -> vol.Schema:
             CONF_ENABLED_PLATFORMS,
             default=data.get(CONF_ENABLED_PLATFORMS, DEFAULT_ENABLED_PLATFORMS),
         ): cv.multi_select(PLATFORM_LABELS),
+        vol.Optional(
+            CONF_EXCLUDE_MATTER,
+            default=data.get(CONF_EXCLUDE_MATTER, DEFAULT_EXCLUDE_MATTER),
+        ): cv.boolean,
     })
 
 
@@ -117,6 +126,7 @@ class dirigera_platform_config_flow(config_entries.ConfigFlow, domain=DOMAIN):
             self.hide_device_set_bulbs = user_input[CONF_HIDE_DEVICE_SET_BULBS]
             self.power_push_throttle = user_input.get(CONF_POWER_PUSH_THROTTLE, DEFAULT_POWER_PUSH_THROTTLE)
             self.enabled_platforms = user_input.get(CONF_ENABLED_PLATFORMS, DEFAULT_ENABLED_PLATFORMS)
+            self.exclude_matter = user_input.get(CONF_EXCLUDE_MATTER, DEFAULT_EXCLUDE_MATTER)
 
             if self.ip is None or len(self.ip.strip()) == 0:
                 logger.debug("IP specified is blank...")
@@ -177,6 +187,7 @@ class dirigera_platform_config_flow(config_entries.ConfigFlow, domain=DOMAIN):
             user_input[CONF_HIDE_DEVICE_SET_BULBS] = self.hide_device_set_bulbs
             user_input[CONF_POWER_PUSH_THROTTLE] = self.power_push_throttle
             user_input[CONF_ENABLED_PLATFORMS] = getattr(self, "enabled_platforms", DEFAULT_ENABLED_PLATFORMS)
+            user_input[CONF_EXCLUDE_MATTER] = getattr(self, "exclude_matter", DEFAULT_EXCLUDE_MATTER)
 
             return self.async_create_entry(
                 title="IKEA Dirigera Hub : {}".format(user_input[CONF_IP_ADDRESS]),
@@ -218,6 +229,7 @@ class OptionsFlowHandler(config_entries.OptionsFlowWithConfigEntry):
             self.hide_device_set_bulbs = user_input[CONF_HIDE_DEVICE_SET_BULBS]
             self.power_push_throttle = user_input.get(CONF_POWER_PUSH_THROTTLE, DEFAULT_POWER_PUSH_THROTTLE)
             self.enabled_platforms = user_input.get(CONF_ENABLED_PLATFORMS, DEFAULT_ENABLED_PLATFORMS)
+            self.exclude_matter = user_input.get(CONF_EXCLUDE_MATTER, DEFAULT_EXCLUDE_MATTER)
             logger.debug(f"IN THIS STEP hide.. set {self.hide_device_set_bulbs}")
 
             if self.ip is None or len(self.ip.strip()) == 0:
@@ -321,6 +333,7 @@ class OptionsFlowHandler(config_entries.OptionsFlowWithConfigEntry):
             user_input[CONF_HIDE_DEVICE_SET_BULBS] = self.hide_device_set_bulbs
             user_input[CONF_POWER_PUSH_THROTTLE] = getattr(self, "power_push_throttle", DEFAULT_POWER_PUSH_THROTTLE)
             user_input[CONF_ENABLED_PLATFORMS] = getattr(self, "enabled_platforms", DEFAULT_ENABLED_PLATFORMS)
+            user_input[CONF_EXCLUDE_MATTER] = getattr(self, "exclude_matter", DEFAULT_EXCLUDE_MATTER)
             logger.debug("before create entry...")
 
             self.hass.config_entries.async_update_entry(self.config_entry, data=user_input,

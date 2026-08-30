@@ -9,11 +9,13 @@
           "ip_address": "Hub IP",
           "hide_device_set_bulbs": "Hide Device Set Bulbs",
           "power_push_throttle_seconds": "Power sensor push throttle (seconds, 0 = off)",
-          "enabled_platforms": "Platforms to import"
+          "enabled_platforms": "Platforms to import",
+          "exclude_matter_devices": "Skip Matter devices"
         },
         "data_description": {
           "power_push_throttle_seconds": "Minimum seconds between recorder writes for the high-frequency push sensors (outlet power and environment). This is a floor, not an exact interval: the write lands on the first device push after the limit elapses, so a sensor that pushes every ~30s rounds a 60s setting up to about 90s. Set 0 to disable.",
-          "enabled_platforms": "Which device types this integration creates entities for. Leave everything selected unless another integration (for example Matter) already imports the same hardware; clearing a platform removes its entities from Home Assistant on the next reload."
+          "enabled_platforms": "Which device types this integration creates entities for. Leave everything selected unless another integration (for example Matter) already imports the same hardware; clearing a platform removes its entities from Home Assistant on the next reload.",
+          "exclude_matter_devices": "Leave off unless you already import IKEA's Matter over Thread devices through the Matter integration. When on, the devices the hub commissioned over Matter are not imported here, so you no longer have to disable each duplicate by hand and newly paired ones stay out automatically. Zigbee devices are unaffected."
         },
         "description": "Enter IKEA Dirigera Hub Details",
         "title": "IKEA Dirigera Hub Setup"
@@ -40,11 +42,13 @@
           "token": "token",
           "hide_device_set_bulbs": "Hide Device Set Bulbs",
           "power_push_throttle_seconds": "Power sensor push throttle (seconds, 0 = off)",
-          "enabled_platforms": "Platforms to import"
+          "enabled_platforms": "Platforms to import",
+          "exclude_matter_devices": "Skip Matter devices"
         },
         "data_description": {
           "power_push_throttle_seconds": "Minimum seconds between recorder writes for the high-frequency push sensors (outlet power and environment). This is a floor, not an exact interval: the write lands on the first device push after the limit elapses, so a sensor that pushes every ~30s rounds a 60s setting up to about 90s. Set 0 to disable.",
-          "enabled_platforms": "Which device types this integration creates entities for. Leave everything selected unless another integration (for example Matter) already imports the same hardware; clearing a platform removes its entities from Home Assistant on the next reload."
+          "enabled_platforms": "Which device types this integration creates entities for. Leave everything selected unless another integration (for example Matter) already imports the same hardware; clearing a platform removes its entities from Home Assistant on the next reload.",
+          "exclude_matter_devices": "Leave off unless you already import IKEA's Matter over Thread devices through the Matter integration. When on, the devices the hub commissioned over Matter are not imported here, so you no longer have to disable each duplicate by hand and newly paired ones stay out automatically. Zigbee devices are unaffected."
         },
         "description": "Update IKEA Dirigera Hub Setting..."
       },

@@ -1,0 +1,251 @@
+[
+  {
+    "id": "device-00",
+    "type": "unknown",
+    "deviceType": "lightSensor",
+    "attributes": {
+      "model": "MYGGSPRAY wrlss mtn sensor",
+      "manufacturer": "IKEA of Sweden",
+      "discriminator": -1,
+      "qrCode": "",
+      "setupCode": ""
+    }
+  },
+  {
+    "id": "device-01",
+    "type": "sensor",
+    "deviceType": "occupancySensor",
+    "attributes": {
+      "model": "MYGGSPRAY wrlss mtn sensor",
+      "manufacturer": "IKEA of Sweden",
+      "discriminator": -1,
+      "qrCode": "",
+      "setupCode": ""
+    }
+  },
+  {
+    "id": "device-02",
+    "type": "controller",
+    "deviceType": "lightController",
+    "attributes": {
+      "model": "RODRET wireless dimmer",
+      "manufacturer": "IKEA of Sweden"
+    }
+  },
+  {
+    "id": "device-03",
+    "type": "light",
+    "deviceType": "light",
+    "attributes": {
+      "model": "TRADFRI bulb E14 CWS globe 806lm",
+      "manufacturer": "IKEA of Sweden"
+    }
+  },
+  {
+    "id": "device-04",
+    "type": "light",
+    "deviceType": "light",
+    "attributes": {
+      "model": "TRADFRI bulb E14 CWS globe 806lm",
+      "manufacturer": "IKEA of Sweden"
+    }
+  },
+  {
+    "id": "device-05",
+    "type": "unknown",
+    "deviceType": "lightSensor",
+    "attributes": {
+      "model": "MYGGSPRAY wrlss mtn sensor",
+      "manufacturer": "IKEA of Sweden",
+      "discriminator": -1,
+      "qrCode": "",
+      "setupCode": ""
+    }
+  },
+  {
+    "id": "device-06",
+    "type": "sensor",
+    "deviceType": "occupancySensor",
+    "attributes": {
+      "model": "MYGGSPRAY wrlss mtn sensor",
+      "manufacturer": "IKEA of Sweden",
+      "discriminator": -1,
+      "qrCode": "",
+      "setupCode": ""
+    }
+  },
+  {
+    "id": "device-07",
+    "type": "unknown",
+    "deviceType": "lightSensor",
+    "attributes": {
+      "model": "MYGGSPRAY wrlss mtn sensor",
+      "manufacturer": "IKEA of Sweden",
+      "discriminator": -1,
+      "qrCode": "",
+      "setupCode": ""
+    }
+  },
+  {
+    "id": "device-08",
+    "type": "sensor",
+    "deviceType": "occupancySensor",
+    "attributes": {
+      "model": "MYGGSPRAY wrlss mtn sensor",
+      "manufacturer": "IKEA of Sweden",
+      "discriminator": -1,
+      "qrCode": "",
+      "setupCode": ""
+    }
+  },
+  {
+    "id": "device-09",
+    "type": "gateway",
+    "deviceType": "gateway",
+    "attributes": {
+      "model": "DIRIGERA Hub for smart products",
+      "manufacturer": "IKEA of Sweden"
+    }
+  },
+  {
+    "id": "device-10",
+    "type": "sensor",
+    "deviceType": "environmentSensor",
+    "attributes": {
+      "model": "ALPSTUGA air quality monitor",
+      "manufacturer": "IKEA of Sweden",
+      "discriminator": -1,
+      "qrCode": "",
+      "setupCode": ""
+    }
+  },
+  {
+    "id": "device-11",
+    "type": "controller",
+    "deviceType": "genericSwitch",
+    "attributes": {
+      "model": "BILRESA scroll wheel",
+      "manufacturer": "IKEA of Sweden",
+      "discriminator": -1,
+      "qrCode": "",
+      "setupCode": ""
+    }
+  },
+  {
+    "id": "device-12",
+    "type": "controller",
+    "deviceType": "genericSwitch",
+    "attributes": {
+      "model": "BILRESA scroll wheel",
+      "manufacturer": "IKEA of Sweden",
+      "discriminator": -1,
+      "qrCode": "",
+      "setupCode": ""
+    }
+  },
+  {
+    "id": "device-13",
+    "type": "controller",
+    "deviceType": "genericSwitch",
+    "attributes": {
+      "model": "BILRESA scroll wheel",
+      "manufacturer": "IKEA of Sweden",
+      "discriminator": -1,
+      "qrCode": "",
+      "setupCode": ""
+    }
+  },
+  {
+    "id": "device-14",
+    "type": "light",
+    "deviceType": "light",
+    "attributes": {
+      "model": "TRADFRI bulb E27 WS globe 1055lm",
+      "manufacturer": "IKEA of Sweden"
+    }
+  },
+  {
+    "id": "device-15",
+    "type": "light",
+    "deviceType": "light",
+    "attributes": {
+      "model": "TRADFRI bulb E14 CWS globe 806lm",
+      "manufacturer": "IKEA of Sweden"
+    }
+  },
+  {
+    "id": "device-16",
+    "type": "outlet",
+    "deviceType": "outlet",
+    "attributes": {
+      "model": "TRETAKT Smart plug",
+      "manufacturer": "IKEA of Sweden"
+    }
+  },
+  {
+    "id": "device-17",
+    "type": "sensor",
+    "deviceType": "openCloseSensor",
+    "attributes": {
+      "model": "MYGGBETT door/window sensor",
+      "manufacturer": "IKEA of Sweden",
+      "discriminator": -1,
+      "qrCode": "",
+      "setupCode": ""
+    }
+  },
+  {
+    "id": "device-18",
+    "type": "sensor",
+    "deviceType": "waterSensor",
+    "attributes": {
+      "model": "KLIPPBOK water leak sensor",
+      "manufacturer": "IKEA of Sweden",
+      "discriminator": -1,
+      "qrCode": "",
+      "setupCode": ""
+    }
+  },
+  {
+    "id": "device-19",
+    "type": "sensor",
+    "deviceType": "openCloseSensor",
+    "attributes": {
+      "model": "MYGGBETT door/window sensor",
+      "manufacturer": "IKEA of Sweden",
+      "discriminator": -1,
+      "qrCode": "",
+      "setupCode": ""
+    }
+  },
+  {
+    "id": "device-20",
+    "type": "controller",
+    "deviceType": "lightController",
+    "attributes": {
+      "model": "Remote Control N2",
+      "manufacturer": "IKEA of Sweden"
+    }
+  },
+  {
+    "id": "device-21",
+    "type": "light",
+    "deviceType": "light",
+    "attributes": {
+      "model": "TRADFRI bulb E14 CWS globe 806lm",
+      "manufacturer": "IKEA of Sweden"
+    }
+  },
+  {
+    "id": "device-22",
+    "type": "sensor",
+    "deviceType": "openCloseSensor",
+    "attributes": {
+      "model": "MYGGBETT door/window sensor",
+      "manufacturer": "IKEA of Sweden",
+      "discriminator": -1,
+      "qrCode": "",
+      "setupCode": ""
+    }
+  }
+]

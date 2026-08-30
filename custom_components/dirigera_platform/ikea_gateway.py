@@ -43,8 +43,8 @@ class ikea_gateway:
         logger.debug("dirigera_platform init...")
         self.devices = {}
 
-    async def make_devices(self, hass, ip, token):
-        hub: HubX = HubX(token, ip)
+    async def make_devices(self, hass, ip, token, exclude_matter: bool = False):
+        hub: HubX = HubX(token, ip, exclude_matter=exclude_matter)
 
         # issue #38 punt 1+4: coalesce de ~10 /devices-fetches van de get_X-calls hieronder
         # tot één enkele fetch. try/finally garandeert dat de cache-vlag áltijd reset —

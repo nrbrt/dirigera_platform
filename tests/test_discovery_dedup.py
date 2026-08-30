@@ -57,6 +57,10 @@ class FakeHub:
         # shape mirrors a real device payload enough for discover_device
         return {"id": path.rsplit("/", 1)[-1], "deviceType": "environmentSensor", "attributes": {}}
 
+    def is_excluded_matter_device(self, device):
+        """Part of the HubX interface since issue #49. These devices are Zigbee."""
+        return False
+
 
 class FakeHass:
     """Runs executor jobs inline so the test stays synchronous."""

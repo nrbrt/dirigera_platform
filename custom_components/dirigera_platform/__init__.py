@@ -25,6 +25,8 @@ from .const import (
     CONF_HIDE_DEVICE_SET_BULBS,
     CONF_ENABLED_PLATFORMS,
     DEFAULT_ENABLED_PLATFORMS,
+    CONF_EXCLUDE_MATTER,
+    DEFAULT_EXCLUDE_MATTER,
     PLATFORM,
     DISCOVERY_COORDINATOR,
 )
@@ -311,7 +313,11 @@ async def async_setup_entry(
     hass.data[DOMAIN][entry.entry_id] = hass_data
 
     hass_data = dict(entry.data)
-    hub = HubX(hass_data[CONF_TOKEN], hass_data[CONF_IP_ADDRESS])
+    hub = HubX(
+        hass_data[CONF_TOKEN],
+        hass_data[CONF_IP_ADDRESS],
+        exclude_matter=hass_data.get(CONF_EXCLUDE_MATTER, DEFAULT_EXCLUDE_MATTER),
+    )
     
     # Lets get all kinds that we are interested in one go and create the devices
     # such that the platform can go ahead and add the associated sensors
@@ -322,7 +328,12 @@ async def async_setup_entry(
     hass.data[DOMAIN][entry.entry_id]["gateway"] = platform
     logger.debug("Starting make_devices...")
     try:
-        await platform.make_devices(hass,hass_data[CONF_IP_ADDRESS], hass_data[CONF_TOKEN])
+        await platform.make_devices(
+            hass,
+            hass_data[CONF_IP_ADDRESS],
+            hass_data[CONF_TOKEN],
+            hass_data.get(CONF_EXCLUDE_MATTER, DEFAULT_EXCLUDE_MATTER),
+        )
     except (ConnectionError, OSError) as err:
         raise ConfigEntryNotReady(
             f"Cannot connect to IKEA Dirigera hub at {hass_data[CONF_IP_ADDRESS]}: {err}"
@@ -402,7 +413,11 @@ async def async_unload_entry(
         await hass.async_add_executor_job(hub_events.stop)
 
     hass_data = dict(entry.data)
-    hub = HubX(hass_data[CONF_TOKEN], hass_data[CONF_IP_ADDRESS])
+    hub = HubX(
+        hass_data[CONF_TOKEN],
+        hass_data[CONF_IP_ADDRESS],
+        exclude_matter=hass_data.get(CONF_EXCLUDE_MATTER, DEFAULT_EXCLUDE_MATTER),
+    )
 
     # For each controller if there is an empty scene delete it
     logger.debug("In unload so forcing delete of scenes...")

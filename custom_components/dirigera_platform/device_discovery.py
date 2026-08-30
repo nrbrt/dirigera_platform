@@ -139,6 +139,16 @@ class DeviceDiscoveryCoordinator:
                 logger.error(f"Failed to fetch device data for {device_id}")
                 return False
 
+            # issue #49: a device the hub commissioned over Matter, while the
+            # user asked us not to import those. Remember it so later events
+            # from the same device short-circuit instead of re-fetching.
+            if self._hub.is_excluded_matter_device(device_data):
+                logger.debug(
+                    "Skipping Matter device %s, excluded by configuration", device_id
+                )
+                self._unsupported_device_ids.add(device_id)
+                return False
+
             logger.debug(f"Fetched device data for {device_id}: {device_data.get('attributes', {}).get('customName', 'unnamed')}")
 
             # Create the entity based on device type

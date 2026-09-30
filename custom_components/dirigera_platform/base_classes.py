@@ -18,8 +18,6 @@ from homeassistant.const import (
     UnitOfEnergy,
     UnitOfPower,
     UnitOfTemperature,
-    CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
-    CONCENTRATION_PARTS_PER_MILLION,
     LIGHT_LUX
     )
 
@@ -32,6 +30,7 @@ from dirigera.devices.air_purifier import FanModeEnum
 
 from .hub_event_listener import hub_event_listener, registry_entry
 from .const import DOMAIN, DEFAULT_POWER_PUSH_THROTTLE
+from .compat import MICROGRAMS_PER_CUBIC_METER, PARTS_PER_MILLION
 
 from enum import Enum
 import asyncio
@@ -668,7 +667,7 @@ class ikea_vindstyrka_pm25(ikea_base_device_sensor, SensorEntity):
                          id_suffix=id_suffix,
                          name=name_suffix,
                          device_class=SensorDeviceClass.PM25,
-                         native_unit_of_measurement=CONCENTRATION_MICROGRAMS_PER_CUBIC_METER,
+                         native_unit_of_measurement=MICROGRAMS_PER_CUBIC_METER,
                          state_class="measurement")
 
     @property
@@ -713,7 +712,7 @@ class ikea_alpstuga_co2(ikea_base_device_sensor, SensorEntity):
             id_suffix="CO2",
             name="CO2",
             device_class=SensorDeviceClass.CO2,
-            native_unit_of_measurement=CONCENTRATION_PARTS_PER_MILLION,
+            native_unit_of_measurement=PARTS_PER_MILLION,
             state_class="measurement")
 
     @property

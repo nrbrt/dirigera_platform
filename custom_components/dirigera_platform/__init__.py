@@ -368,7 +368,7 @@ async def async_setup_entry(
     hub_basic = Hub(hass_data[CONF_TOKEN], hass_data[CONF_IP_ADDRESS])
 
     if hass_data[CONF_IP_ADDRESS] != "mock":
-        hub_events = hub_event_listener(hub_basic, hass, discovery)
+        hub_events = hub_event_listener(hub_basic, hass, discovery, entry.entry_id)
         hub_events.start()
         try:
             # Sync device names and areas from Dirigera to HA device registry

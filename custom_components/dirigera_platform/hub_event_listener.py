@@ -16,6 +16,20 @@ from homeassistant.const import ATTR_ENTITY_ID
 from homeassistant.components.light import ColorMode
 from homeassistant.helpers import device_registry as dr, entity_registry as er, area_registry as ar
 
+
+def get_device_by_identifier(device_reg, identifier, config_entry_id):
+    """Look up a device by identifier without the deprecated async_get_device.
+
+    Since 2026.9 identifiers are no longer unique across config entries, so
+    the lookup is scoped to our entry. Older releases lack the new method and
+    keep using async_get_device.
+    """
+    by_identifier = getattr(device_reg, "async_get_device_by_identifier", None)
+    if by_identifier is not None and config_entry_id is not None:
+        return by_identifier(identifier, config_entry_id)
+    return device_reg.async_get_device({identifier})
+
+
 logger = logging.getLogger("custom_components.dirigera_platform.hub_event_listener")
 
 DATE_TIME_FORMAT:str =  "%Y-%m-%dT%H:%M:%S.%fZ"
@@ -225,8 +239,10 @@ class hub_event_listener(threading.Thread):
     # Fix: send a minimal application-level text frame well within that window.
     KEEPALIVE_INTERVAL = 15 * 60  # seconds — well below the hub's ~60 min timeout
 
-    def __init__(self, hub : Hub, hass, discovery_coordinator=None):
+    def __init__(self, hub : Hub, hass, discovery_coordinator=None, config_entry_id=None):
         super().__init__()
+        # Scopes device-registry lookups to this hub's entry (#52).
+        self._config_entry_id = config_entry_id
         self._hub : Hub = hub
         # Key into the per-hub device registry. Entities of this hub register
         # under the same key (their hub shares this websocket_base_url). See #39.
@@ -253,7 +269,9 @@ class hub_event_listener(threading.Thread):
             area_reg = ar.async_get(self._hass)
 
             # Find the device entry
-            device_entry = device_reg.async_get_device({("dirigera_platform", device_id)})
+            device_entry = get_device_by_identifier(
+                device_reg, ("dirigera_platform", device_id), self._config_entry_id
+            )
             if device_entry is None:
                 logger.debug(f"Device {device_id} not found in HA device registry")
                 return
@@ -293,7 +311,9 @@ class hub_event_listener(threading.Thread):
             device_reg = dr.async_get(self._hass)
 
             # Find the device entry
-            device_entry = device_reg.async_get_device({("dirigera_platform", device_id)})
+            device_entry = get_device_by_identifier(
+                device_reg, ("dirigera_platform", device_id), self._config_entry_id
+            )
             if device_entry is None:
                 logger.debug(f"Device {device_id} not found in HA device registry for name update")
                 return

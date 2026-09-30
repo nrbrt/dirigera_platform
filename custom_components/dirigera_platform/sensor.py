@@ -95,6 +95,14 @@ async def async_setup_entry(
     discovery = hass.data[DOMAIN][config_entry.entry_id].get("discovery")
     if discovery:
         discovery.register_platform_callback("sensor", async_add_entities)
+        # A plug paired at runtime only gets its switch from discovery; the
+        # power/energy sensors are built here at startup, so hand discovery the
+        # same builder. Without it a new GRILLPLATS showed no energy until the
+        # next restart.
+        discovery.register_companion_factory(
+            "outlet",
+            lambda wrapper: build_outlet_power_entities([wrapper], power_push_throttle),
+        )
         for sensor in platform.environment_sensors:
             discovery.register_known_device(sensor._json_data.id)
         for sensor in platform.light_sensors:
@@ -140,7 +148,16 @@ async def add_environment_sensors(async_add_entities, env_devices, push_throttle
     async_add_entities(env_sensors)
 
 async def add_outlet_power_attrs(async_add_entities, outlets, push_throttle=None):
-    # Add sensors for the outlets
+    power_entities = build_outlet_power_entities(outlets, push_throttle)
+    logger.debug(f"Found {len(power_entities)}, power attribute sensors for outlets")
+    async_add_entities(power_entities)
+
+def build_outlet_power_entities(outlets, push_throttle=None):
+    """Build the power/energy sensors for outlets that report them.
+
+    Shared by the startup path and by runtime discovery, so a plug paired
+    while HA is running gets the same sensors as one present at startup.
+    """
     power_entities = []
     # Explicit attr -> entity class map (used to be an eval on the attr name)
     power_attr_sensors = {
@@ -165,9 +182,7 @@ async def add_outlet_power_attrs(async_add_entities, outlets, push_throttle=None
                 if push_throttle is not None and attr in throttled_attrs:
                     entity._ha_push_throttle_seconds = push_throttle
                 power_entities.append(entity)
-
-    logger.debug(f"Found {len(power_entities)}, power attribute sensors for outlets")
-    async_add_entities(power_entities)
+    return power_entities
 
 async def add_air_purifier_sensors(async_add_entities, air_purifiers):
     #Now Air Purifier Sensors

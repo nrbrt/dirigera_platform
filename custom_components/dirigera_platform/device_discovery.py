@@ -46,6 +46,8 @@ class DeviceDiscoveryCoordinator:
         self._hass = hass
         self._hub = hub
         self._platform_callbacks: Dict[str, Callable] = {}
+        # device_type -> callable(wrapper) returning extra sensor entities
+        self._companion_factories: Dict[str, Callable] = {}
         self._known_device_ids: set = set()
         self._pending_discovery: set = set()  # Devices currently being discovered
         # Devices whose entity creation returned None (unsupported device type /
@@ -64,6 +66,15 @@ class DeviceDiscoveryCoordinator:
         """
         logger.debug(f"Registering discovery callback for platform: {platform}")
         self._platform_callbacks[platform] = callback
+
+    def register_companion_factory(self, device_type: str, factory: Callable) -> None:
+        """
+        Register a builder for sensor entities that belong with a device type.
+
+        Called with the device wrapper of a runtime-discovered device; the
+        returned entities are added through the sensor platform callback.
+        """
+        self._companion_factories[device_type] = factory
 
     def register_known_device(self, device_id: str) -> None:
         """
@@ -172,6 +183,7 @@ class DeviceDiscoveryCoordinator:
             # added at runtime (e.g. a freshly paired BADRING) get the
             # battery sensor without requiring a HA restart.
             self._add_battery_companion(device_type, entity)
+            self._add_registered_companions(device_type, entity)
 
             # Mark as known
             self._known_device_ids.add(device_id)
@@ -343,6 +355,24 @@ class DeviceDiscoveryCoordinator:
             return
         from .base_classes import battery_percentage_sensor
         sensor_cb([battery_percentage_sensor(wrapper)])
+
+    def _add_registered_companions(self, device_type: str, primary_entity: Any) -> None:
+        """Emit the sensors a platform registered for this device type, such as
+        the power/energy sensors of a plug (registered by sensor.py)."""
+        factory = self._companion_factories.get(device_type)
+        if factory is None:
+            return
+        wrapper = getattr(primary_entity, "_device", None)
+        if wrapper is None:
+            return
+        sensor_cb = self._platform_callbacks.get("sensor")
+        if sensor_cb is None:
+            logger.debug("No 'sensor' callback registered, skipping %s companions", device_type)
+            return
+        entities = factory(wrapper)
+        if entities:
+            logger.debug("Adding %d companion sensors for %s", len(entities), device_type)
+            sensor_cb(entities)
 
 
 # Global instance - will be initialized in __init__.py

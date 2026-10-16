@@ -496,23 +496,62 @@ class ikea_water_sensor(ikea_base_device_sensor, BinarySensorEntity):
         return self._device.water_leak_detected
          
 class ikea_blinds_device(ikea_base_device):
+    BLINDS_STATE_STOPPED = "stopped"
+
     def __init__(self, hass:core.HomeAssistant, hub:Hub, blind:Blind):
         logger.debug("IkeaBlinds ctor...")
         super().__init__(hass, hub, blind, hub.get_blinds_by_id)
+        # Set by async_stop_cover, see stop_requested for why it exists.
+        self._stop_requested = False
+        self._stop_target_level = None
     
     @property
     def device_class(self) -> str:
         return CoverDeviceClass.BLIND
+
+    @property
+    def can_stop(self) -> bool:
+        capabilities = getattr(self._json_data, "capabilities", None)
+        return "blindsState" in (getattr(capabilities, "can_receive", None) or [])
+
+    @property
+    def stop_requested(self) -> bool:
+        """True while the blind should be treated as standing still after a stop."""
+        if (self._stop_requested
+                and self._json_data.attributes.blinds_target_level != self._stop_target_level):
+            self._stop_requested = False
+        return self._stop_requested
+
+    def _send_stop(self) -> None:
+        """Blocking: ask the hub to halt the blind. Run in the executor."""
+        blind = self._json_data
+        blind.dirigera_client.patch(
+            route=f"/devices/{blind.id}",
+            data=[{"attributes": {"blindsState": self.BLINDS_STATE_STOPPED}}],
+        )
     
     async def async_open_cover(self):
+        self._stop_requested = False
         await self._hass.async_add_executor_job(self._json_data.set_target_level, 0)
 
     async def async_close_cover(self):
+        self._stop_requested = False
         await self._hass.async_add_executor_job(self._json_data.set_target_level, 100)
 
     async def async_set_cover_position(self, position:int):
         if position >= 0 and position <= 100:
+            self._stop_requested = False
             await self._hass.async_add_executor_job(self._json_data.set_target_level,100 - position)
+
+    async def async_stop_cover(self):
+        if not self.can_stop:
+            raise HomeAssistantError(f"{self.name} does not support stopping")
+        await self._hass.async_add_executor_job(self._send_stop)
+        # Only after the hub accepted it, so a failed request leaves state alone.
+        attributes = self._json_data.attributes
+        self._stop_target_level = attributes.blinds_target_level
+        self._stop_requested = True
+        attributes.blinds_state = self.BLINDS_STATE_STOPPED
     
 class ikea_blinds_sensor(ikea_base_device_sensor, CoverEntity):
     def __init__(self, device:ikea_blinds_device):
@@ -525,11 +564,15 @@ class ikea_blinds_sensor(ikea_base_device_sensor, CoverEntity):
 
     @property
     def supported_features(self):
-        return (
+        features = (
             CoverEntityFeature.OPEN
             | CoverEntityFeature.CLOSE
             | CoverEntityFeature.SET_POSITION
         )
+        # Issue #58: only offer cover.stop_cover when the hub accepts it.
+        if self._device.can_stop:
+            features |= CoverEntityFeature.STOP
+        return features
 
     @property
     def current_cover_position(self):
@@ -553,6 +596,9 @@ class ikea_blinds_sensor(ikea_base_device_sensor, CoverEntity):
 
     @property
     def is_closing(self):
+        if self._device.stop_requested:
+            return False
+
         if self.current_cover_position is None or self.target_cover_position is None:
             return False
 
@@ -563,6 +609,9 @@ class ikea_blinds_sensor(ikea_base_device_sensor, CoverEntity):
 
     @property
     def is_opening(self):
+        if self._device.stop_requested:
+            return False
+
         if self.current_cover_position is None or self.target_cover_position is None:
             return False
 
@@ -580,6 +629,9 @@ class ikea_blinds_sensor(ikea_base_device_sensor, CoverEntity):
     async def async_set_cover_position(self, **kwargs):
         position = int(kwargs["position"])
         await self._device.async_set_cover_position(position)
+
+    async def async_stop_cover(self, **kwargs):
+        await self._device.async_stop_cover()
 
 class ikea_vindstyrka_device(ikea_base_device):
     def __init__(self, hass:core.HomeAssistant, hub:Hub , json_data:EnvironmentSensor) -> None:

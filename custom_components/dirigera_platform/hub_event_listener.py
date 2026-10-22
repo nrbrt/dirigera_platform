@@ -35,6 +35,10 @@ logger = logging.getLogger("custom_components.dirigera_platform.hub_event_listen
 DATE_TIME_FORMAT:str =  "%Y-%m-%dT%H:%M:%S.%fZ"
 
 process_events_from = {
+    # Remotes: battery only. Not customName -- a BILRESA's second half carries its
+    # own (stale) name and is routed to the primary entity, so it would rename it.
+    "lightController" :     ["batteryPercentage"],
+    "genericSwitch"   :     ["batteryPercentage"],
     "motionSensor"    :     ["isDetected","isOn","batteryPercentage","customName"],
     "occupancySensor" :     ["isDetected","isOn","batteryPercentage","customName"],
     "outlet"          :     [   "isOn",

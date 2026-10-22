@@ -27,6 +27,7 @@ If you arrived here from an open issue on [sanjoyg/dirigera_platform](https://gi
 | [#155](https://github.com/sanjoyg/dirigera_platform/issues/155) | Integration failed setup on 2025.6.0 | v0.2.7 (`ConfigEntryNotReady` retry + deprecated `hass.loop` migration) |
 | [#160](https://github.com/sanjoyg/dirigera_platform/issues/160) | TRADFRI on/off switch - not properly integrated | v0.2.6 (multi-button scene-creation per controller half) |
 | [#165](https://github.com/sanjoyg/dirigera_platform/issues/165) | VALLHORN motion sensor not providing illuminance | v0.2.1 (separate light sensor entities with lux conversion) |
+| [#167](https://github.com/sanjoyg/dirigera_platform/issues/167) | Battery status of on/off switch not updated and requires manual reload | unreleased (remote battery levels taken from hub events) |
 | [#168](https://github.com/sanjoyg/dirigera_platform/issues/168) | Disconnected due to inactivity | v0.2.11/12 (application-level WebSocket keepalive) |
 | [#175](https://github.com/sanjoyg/dirigera_platform/issues/175) | MotionSensor fails setup when batteryPercentage is missing | v0.2.1 (`batteryPercentage` made optional) |
 | [#177](https://github.com/sanjoyg/dirigera_platform/issues/177) | Styrbar 4-button - no events | v0.2.6 (per-button scene creation) |

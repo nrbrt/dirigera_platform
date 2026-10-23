@@ -1,16 +1,13 @@
 from __future__ import annotations
-from typing import Any, Dict, List, Optional
+from typing import List
 
 from dirigera import Hub
-
-from dirigera.devices.device import Attributes, Device
 
 from .const import MATTER_ATTRIBUTE_KEYS
 from dirigera.devices.outlet import Outlet, dict_to_outlet
 from dirigera.devices.environment_sensor import EnvironmentSensor, dict_to_environment_sensor
-from dirigera.hub.abstract_smart_home_hub import AbstractSmartHomeHub
 from dirigera.devices.scene import Info, Icon, Trigger, TriggerDetails, ControllerType
-from dirigera.devices.light import Light, LightAttributes
+from dirigera.devices.motion_sensor import MotionSensor, dict_to_motion_sensor
 import logging
 
 logger = logging.getLogger("custom_components.dirigera_platform")
@@ -95,14 +92,6 @@ class HubX(Hub):
         self._devices_cache_active = False
         self._devices_cache = None
 
-    def get_controllers(self) -> List[ControllerX]:
-        """
-        Fetches all controllers registered in the Hub
-        """
-        devices = self.get("/devices")
-        controllers = list(filter(lambda x: x["type"] == "controller", devices))
-        return [dict_to_controller(controller, self) for controller in controllers]
-    
     # Scenes are a problem so making a hack
     def get_scenes(self):
         """
@@ -165,7 +154,10 @@ class HubX(Hub):
         from the linked electricalSensor device into the outlet.
         """
         devices = self.get("/devices")
-        outlets = list(filter(lambda x: x["type"] == "outlet", devices))
+        # deviceType, not type: on some firmware the metering half of a
+        # GRILLPLATS has type "outlet" too, and parsing it as an Outlet fails
+        # on the missing isOn (dirigera issue #131).
+        outlets = list(filter(lambda x: x["deviceType"] == "outlet", devices))
         electrical_sensors = list(filter(
             lambda x: x.get("deviceType") == "electricalSensor", devices
         ))
@@ -277,7 +269,7 @@ class HubX(Hub):
                 return sensor
         raise ValueError(f"No environment sensor found with id {id_}")
 
-    def get_motion_sensors(self) -> List[MotionSensorX]:
+    def get_motion_sensors(self) -> List[MotionSensor]:
         """
         Fetches all motion sensors registered in the Hub.
         Includes both motionSensor and occupancySensor device types.
@@ -285,9 +277,9 @@ class HubX(Hub):
         """
         devices = self.get("/devices")
         sensors = list(filter(lambda x: x["deviceType"] in ("motionSensor", "occupancySensor"), devices))
-        return [dict_to_motion_sensor_x(sensor, self) for sensor in sensors]
+        return [dict_to_motion_sensor(sensor, self) for sensor in sensors]
 
-    def get_motion_sensor_by_id(self, id_: str) -> MotionSensorX:
+    def get_motion_sensor_by_id(self, id_: str) -> MotionSensor:
         """
         Fetches a motion sensor by ID.
         Accepts both motionSensor and occupancySensor device types.
@@ -295,55 +287,8 @@ class HubX(Hub):
         motion_sensor = self._get_device_data_by_id(id_)
         if motion_sensor["deviceType"] not in ("motionSensor", "occupancySensor"):
             raise ValueError("Device is not a MotionSensor or OccupancySensor")
-        return dict_to_motion_sensor_x(motion_sensor, self)
+        return dict_to_motion_sensor(motion_sensor, self)
 
-    def get_lights(self) -> List[LightX]:
-        """
-        Fetches all lights registered in the Hub.
-        Same as the library's Hub.get_lights, but builds LightX so the hub's
-        colorMode survives parsing (issue #50).
-        """
-        devices = self.get("/devices")
-        lights = list(filter(lambda x: x["type"] == "light", devices))
-        return [dict_to_light_x(light, self) for light in lights]
-
-    def get_light_by_id(self, id_: str) -> LightX:
-        """
-        Fetches a light by ID, as LightX (issue #50).
-        """
-        light = self._get_device_data_by_id(id_)
-        if light["type"] != "light":
-            raise ValueError("Device is not a light")
-        return dict_to_light_x(light, self)
-
-
-class ControllerAttributesX(Attributes):
-    is_on: Optional[bool] = None
-    battery_percentage: Optional[int] = None
-    switch_label: Optional[str] = None
-
-class ControllerX(Device):
-    dirigera_client: AbstractSmartHomeHub
-    attributes: ControllerAttributesX
-
-    def reload(self) -> ControllerX:
-        data = self.dirigera_client.get(route=f"/devices/{self.id}")
-        return ControllerX(dirigeraClient=self.dirigera_client, **data)
-
-    def set_name(self, name: str) -> None:
-        if "customName" not in self.capabilities.can_receive:
-            raise AssertionError(
-                "This controller does not support the set_name function"
-            )
-
-        data = [{"attributes": {"customName": name}}]
-        self.dirigera_client.patch(route=f"/devices/{self.id}", data=data)
-        self.attributes.custom_name = name
-
-def dict_to_controller(
-    data: Dict[str, Any], dirigera_client: AbstractSmartHomeHub
-) -> ControllerX:
-    return ControllerX(dirigeraClient=dirigera_client, **data)
 
 class HackScene():
 
@@ -372,57 +317,3 @@ class HackScene():
 
     def undo(self) -> None:
         self.hub.post(route=f"/scenes/{self.id}/undo")
-
-
-# Motion sensor patch for MYGGSPRAY (occupancySensor)
-# MYGGSPRAY sensors don't have is_on attribute, so we make it optional
-class MotionSensorAttributesX(Attributes):
-    battery_percentage: Optional[int] = None
-    is_on: Optional[bool] = None  # Made optional for MYGGSPRAY compatibility
-    light_level: Optional[float] = None
-    is_detected: Optional[bool] = False
-
-
-class MotionSensorX(Device):
-    dirigera_client: AbstractSmartHomeHub
-    attributes: MotionSensorAttributesX
-
-    def reload(self) -> "MotionSensorX":
-        data = self.dirigera_client.get(route=f"/devices/{self.id}")
-        return MotionSensorX(dirigeraClient=self.dirigera_client, **data)
-
-    def set_name(self, name: str) -> None:
-        if "customName" not in self.capabilities.can_receive:
-            raise AssertionError("This sensor does not support the set_name function")
-        data = [{"attributes": {"customName": name}}]
-        self.dirigera_client.patch(route=f"/devices/{self.id}", data=data)
-        self.attributes.custom_name = name
-
-
-def dict_to_motion_sensor_x(
-    data: Dict[str, Any], dirigera_client: AbstractSmartHomeHub
-) -> MotionSensorX:
-    return MotionSensorX(dirigeraClient=dirigera_client, **data)
-
-
-# Light patch for issue #50
-# The hub reports "colorMode": "color" | "temperature" on every light, but the
-# library's LightAttributes drops it (pydantic extra=ignore). Carrying it lets
-# the entity report the bulb's real colour mode after a restart instead of
-# defaulting to hs (see light.py set_state and hub_event_listener colorMode).
-class LightAttributesX(LightAttributes):
-    color_mode: Optional[str] = None
-
-
-class LightX(Light):
-    attributes: LightAttributesX
-
-    def reload(self) -> "LightX":
-        data = self.dirigera_client.get(route=f"/devices/{self.id}")
-        return LightX(dirigeraClient=self.dirigera_client, **data)
-
-
-def dict_to_light_x(
-    data: Dict[str, Any], dirigera_client: AbstractSmartHomeHub
-) -> LightX:
-    return LightX(dirigeraClient=dirigera_client, **data)

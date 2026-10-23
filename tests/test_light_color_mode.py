@@ -2,20 +2,19 @@
 Issue #50: a dual-mode bulb must report the hub's colour mode after a restart.
 
 The hub sends "colorMode": "temperature" | "color" on every light. Before this
-fix the library model dropped the key, and set_state() picked hs for every
+fix the model dropped the key, and set_state() picked hs for every
 bulb that supports hs. A bulb the hub held in colour-temperature mode then
 reported color_mode hs and color_temp_kelvin None until its next colour event.
 
 Two things are guarded here.
 
-1. The model. HubX.get_lights() and get_light_by_id() must build LightX, and
-   LightX must keep colorMode as attributes.color_mode. ikea_gateway calls the
-   first at startup and async_update() calls the second, so both are tested.
+1. The model. dirigera >= 1.6.0 keeps colorMode as attributes.color_mode on
+   its own Light, which replaced this integration's LightX subclass. Startup,
+   async_update() and runtime discovery all build that Light.
 
 2. set_state(). It must follow color_mode when present, and keep the old
-   hs-first rule when the field is absent. A light from runtime discovery is
-   still a plain library Light with no color_mode field, so the fallback is
-   load-bearing, not dead code.
+   hs-first rule when it is None: not every bulb reports colorMode, so the
+   fallback is load-bearing, not dead code.
 
 As in test_matter_filtering.py, the code under test is lifted out of the
 source with ast, so the real bodies run without importing homeassistant.
@@ -34,7 +33,6 @@ COMPONENT = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
     "custom_components", "dirigera_platform",
 )
-PATCH = os.path.join(COMPONENT, "dirigera_lib_patch.py")
 LIGHT = os.path.join(COMPONENT, "light.py")
 
 
@@ -97,8 +95,7 @@ def test_color_mode_is_reported_as_hs():
     assert _bulb(DUAL_MODE, color_mode="color")._color_mode == ColorMode.HS
 
 
-def test_plain_light_without_the_field_keeps_hs_first():
-    # Runtime discovery still builds a library Light: no color_mode attribute.
+def test_model_without_the_field_keeps_hs_first():
     assert _bulb(DUAL_MODE)._color_mode == ColorMode.HS
 
 
@@ -123,7 +120,7 @@ def test_supported_modes_are_unchanged():
     assert bulb._supported_color_modes == [ColorMode.COLOR_TEMP, ColorMode.HS]
 
 
-# --- LightX and the HubX getters --------------------------------------------
+# --- the library Light ------------------------------------------------------
 
 def _device(color_mode):
     return {
@@ -166,14 +163,9 @@ def _import_real_dirigera():
         sys.modules.update(saved)
 
 
-from typing import Any, Dict, List, Optional
-
 _light_lib, _hub_lib = _import_real_dirigera()
 if _light_lib is not None:
-    Light = _light_lib.Light
-    LightAttributes = _light_lib.LightAttributes
     dict_to_light = _light_lib.dict_to_light
-    AbstractSmartHomeHub = _hub_lib.AbstractSmartHomeHub
     FakeDirigeraHub = _hub_lib.FakeDirigeraHub
 else:
     FakeDirigeraHub = None
@@ -181,75 +173,24 @@ else:
 needs_dirigera = pytest.mark.skipif(FakeDirigeraHub is None, reason="dirigera not installed")
 
 
-@pytest.fixture(scope="module")
-def patch_ns():
-    tree = _parse(PATCH)
-    wanted = {"LightAttributesX", "LightX", "dict_to_light_x"}
-    nodes = [n for n in tree.body
-             if isinstance(n, (ast.ClassDef, ast.FunctionDef)) and n.name in wanted]
-    assert {n.name for n in nodes} == wanted
-    getters = [_method(tree, "HubX", "get_lights"), _method(tree, "HubX", "get_light_by_id")]
-    ns = {"Any": Any, "Dict": Dict, "List": List, "Optional": Optional,
-          "Light": Light, "LightAttributes": LightAttributes,
-          "AbstractSmartHomeHub": AbstractSmartHomeHub, "__name__": "lightx_test"}
-    _exec(nodes, PATCH, ns)
-    _exec(getters, PATCH, ns)
-    return ns
-
-
-def _hub(ns, *devices):
-    """The library's fake hub, with the lifted HubX getters bound to it."""
-    hub = FakeDirigeraHub()
-    hub.get_action_replys["/devices"] = list(devices)
-    for device in devices:
-        hub.get_action_replys[f"/devices/{device['id']}"] = device
-    hub._get_device_data_by_id = lambda id_: hub.get(f"/devices/{id_}")
-    hub.get_lights = ns["get_lights"].__get__(hub)
-    hub.get_light_by_id = ns["get_light_by_id"].__get__(hub)
-    return hub
-
-
 @needs_dirigera
 @pytest.mark.parametrize("mode", ["temperature", "color"])
-def test_get_lights_keeps_color_mode(patch_ns, mode):
-    lights = _hub(patch_ns, _device(mode)).get_lights()
-    assert isinstance(lights[0], patch_ns["LightX"])
-    assert lights[0].attributes.color_mode == mode
+def test_library_light_keeps_color_mode(mode):
+    light = dict_to_light(_device(mode), FakeDirigeraHub())
+    assert light.attributes.color_mode == mode
 
 
 @needs_dirigera
-def test_get_light_by_id_keeps_color_mode(patch_ns):
-    light = _hub(patch_ns, _device("temperature")).get_light_by_id("light-1")
-    assert isinstance(light, patch_ns["LightX"])
-    assert light.attributes.color_mode == "temperature"
+def test_light_without_color_mode_reports_none():
+    data = _device("temperature")
+    del data["attributes"]["colorMode"]
+    light = dict_to_light(data, FakeDirigeraHub())
+    assert light.attributes.color_mode is None
 
 
 @needs_dirigera
-def test_get_light_by_id_rejects_other_types(patch_ns):
-    other = dict(_device("temperature"), type="outlet")
-    with pytest.raises(ValueError):
-        _hub(patch_ns, other).get_light_by_id("light-1")
-
-
-@needs_dirigera
-def test_reload_stays_lightx(patch_ns):
-    light = _hub(patch_ns, _device("color")).get_light_by_id("light-1")
-    reloaded = light.reload()
-    assert isinstance(reloaded, patch_ns["LightX"])
-    assert reloaded.attributes.color_mode == "color"
-
-
-@needs_dirigera
-def test_color_mode_field_accepts_listener_writes(patch_ns):
+def test_color_mode_field_accepts_listener_writes():
     # hub_event_listener stores a live colorMode with a plain attribute write.
-    light = _hub(patch_ns, _device("temperature")).get_light_by_id("light-1")
+    light = dict_to_light(_device("temperature"), FakeDirigeraHub())
     light.attributes.color_mode = "color"
     assert light.attributes.color_mode == "color"
-
-
-@needs_dirigera
-def test_library_light_drops_the_key():
-    # The reason LightX exists. If a future dirigera release keeps colorMode,
-    # this fails and LightX may be removable.
-    light = dict_to_light(_device("temperature"), FakeDirigeraHub())
-    assert not hasattr(light.attributes, "color_mode")

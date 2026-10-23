@@ -24,6 +24,25 @@ from .device_discovery import get_discovery_coordinator
 
 logger = logging.getLogger("custom_components.dirigera_platform")
 
+
+def _bound_to_kelvin(bound):
+    # Some bulbs (e.g. KAJPLATS) report their colour temperature range in
+    # mireds (153..454) while colorTemperature itself is in Kelvin. This is the
+    # rule dirigera's Light.set_color_temperature() uses for its range check,
+    # so the range HA offers is exactly the range the library accepts.
+    if bound is not None and 0 < bound < 1000:
+        return round(1_000_000 / bound)
+    return bound
+
+
+def _kelvin_range(attributes):
+    """(warmest, coldest) in Kelvin, whatever order and unit the bulb reports."""
+    bounds = [_bound_to_kelvin(attributes.color_temperature_min),
+              _bound_to_kelvin(attributes.color_temperature_max)]
+    if None in bounds:
+        return None, None
+    return min(bounds), max(bounds)
+
 async def async_setup_entry(
     hass: core.HomeAssistant,
     config_entry: config_entries.ConfigEntry,
@@ -171,11 +190,11 @@ class ikea_bulb(LightEntity):
         else:
             self._supported_color_modes = color_modes
             # Prefer the hub's own colorMode ("temperature" | "color") when the
-            # model carries it (LightAttributesX in dirigera_lib_patch, issue
+            # bulb reports it (attributes.color_mode, dirigera >= 1.6.0, issue
             # #50). Without it, a dual-mode bulb in colour-temperature mode
             # reports hs after a restart, and HA reports color_temp_kelvin as
             # None until the next colour event. The HS-first rule below stays
-            # as the fallback for a plain Light (runtime device discovery).
+            # as the fallback for bulbs that do not report colorMode.
             hub_mode = getattr(self._json_data.attributes, "color_mode", None)
             if hub_mode == "temperature" and ColorMode.COLOR_TEMP in self._supported_color_modes:
                 self._color_mode = ColorMode.COLOR_TEMP
@@ -247,14 +266,13 @@ class ikea_bulb(LightEntity):
 
     @property
     def max_color_temp_kelvin(self):
-        # Dirigera API returns Kelvin values directly
-        # colorTemperatureMin = coldest = highest Kelvin (e.g. 4000K)
-        return self._json_data.attributes.color_temperature_min
+        # Coldest, e.g. 4000K. Usually reported as colorTemperatureMin.
+        return _kelvin_range(self._json_data.attributes)[1]
 
     @property
     def min_color_temp_kelvin(self):
-        # colorTemperatureMax = warmest = lowest Kelvin (e.g. 2202K)
-        return self._json_data.attributes.color_temperature_max
+        # Warmest, e.g. 2202K. Usually reported as colorTemperatureMax.
+        return _kelvin_range(self._json_data.attributes)[0]
 
     @property
     def color_temp_kelvin(self):
@@ -338,19 +356,15 @@ class ikea_bulb(LightEntity):
                 logger.debug("Request to set color temp...")
                 ct = kwargs[ATTR_COLOR_TEMP_KELVIN]
                 logger.debug("Set CT (Kelvin): {}".format(ct))
-                # Use direct API patch to bypass library validation issues
-                # The hub expects Kelvin values directly
+                # set_color_temperature() rejects values outside the bulb's
+                # range, so keep the request inside it. It also updates the
+                # local model, which the state write below reads.
+                low, high = self.min_color_temp_kelvin, self.max_color_temp_kelvin
+                if low is not None and high is not None:
+                    ct = max(low, min(high, ct))
                 await self.hass.async_add_executor_job(
-                    self._hub.patch,
-                    f"/devices/{self._json_data.id}",
-                    [{"attributes": {"colorTemperature": ct}}]
+                    self._json_data.set_color_temperature, ct
                 )
-                # The direct patch bypasses the lib, so it does not update the
-                # local model (unlike set_light/set_light_color). Without this
-                # write-through, HA kept showing the old color temperature:
-                # the state write below read stale attributes and the hub echo
-                # is suppressed via _ignore_update.
-                self.color_temperature = ct
                 self._color_mode = ColorMode.COLOR_TEMP
                 self._ignore_update = True
 

@@ -470,9 +470,10 @@ class hub_event_listener(threading.Thread):
             
             unique_key = f"{entity.registry_entry.device_id}_{trigger_type}"
             # last_fired stays None when this key never fired — first events
-            # must not be debounced. The map only ever holds tz-aware parsed
-            # hub timestamps; the old code seeded it with a naive now(), which
-            # made the first aware-minus-naive comparison raise TypeError.
+            # must not be debounced. The map is shared with
+            # parse_remote_press_event and must only hold tz-aware datetimes:
+            # hub timestamps here, aware UTC now() there. A naive value makes
+            # the aware-minus-naive comparison raise TypeError (#65).
             last_fired = controller_trigger_last_time_map.get(unique_key)
             if last_fired is not None:
                 logger.debug(f"Found date/time in map for controller : {last_fired}")
@@ -627,7 +628,7 @@ class hub_event_listener(threading.Thread):
 
         # Debounce: prevent duplicate events within 1 second (IKEA bug workaround)
         unique_key = f"{entity.registry_entry.device_id}_{trigger_type}"
-        now = datetime.datetime.now()
+        now = datetime.datetime.now(datetime.timezone.utc)
         if unique_key in controller_trigger_last_time_map:
             last_fired = controller_trigger_last_time_map[unique_key]
             if (now - last_fired).total_seconds() < 1.0:

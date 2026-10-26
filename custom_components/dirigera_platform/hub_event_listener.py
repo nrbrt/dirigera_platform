@@ -771,7 +771,7 @@ class hub_event_listener(threading.Thread):
                         key_attr = to_snake_case(key)
                         if key == "colorMode":
                             # Drives _color_mode below; only stored on the model
-                            # when it carries the field (LightAttributesX).
+                            # when it carries the field (dirigera >= 1.6.0 Light).
                             if hasattr(entity._json_data.attributes, "color_mode"):
                                 entity._json_data.attributes.color_mode = attributes[key]
                             continue

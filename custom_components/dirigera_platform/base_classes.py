@@ -22,7 +22,7 @@ from homeassistant.const import (
     )
 
 from dirigera import Hub
-from dirigera.devices.blinds import Blind
+from dirigera.devices.blinds import Blind, BlindsStateEnum
 from dirigera.devices.environment_sensor import EnvironmentSensor
 from dirigera.devices.light_sensor import LightSensor
 from dirigera.devices.controller import Controller
@@ -528,11 +528,7 @@ class ikea_blinds_device(ikea_base_device):
 
     def _send_stop(self) -> None:
         """Blocking: ask the hub to halt the blind. Run in the executor."""
-        blind = self._json_data
-        blind.dirigera_client.patch(
-            route=f"/devices/{blind.id}",
-            data=[{"attributes": {"blindsState": self.BLINDS_STATE_STOPPED}}],
-        )
+        self._json_data.set_state(BlindsStateEnum.STOPPED)
     
     async def async_open_cover(self):
         self._stop_requested = False

@@ -244,10 +244,7 @@ class DeviceDiscoveryCoordinator:
             from dirigera.devices.water_sensor import dict_to_water_sensor
             from dirigera.devices.environment_sensor import dict_to_environment_sensor
             from dirigera.devices.light_sensor import dict_to_light_sensor
-            from .dirigera_lib_patch import (
-                dict_to_controller,
-                dict_to_motion_sensor_x,
-            )
+            from dirigera.devices.motion_sensor import dict_to_motion_sensor
 
             if device_type == "light":
                 # Light: ikea_bulb IS the HA entity (no separate wrapper)
@@ -307,7 +304,7 @@ class DeviceDiscoveryCoordinator:
 
             elif device_type in ("motionSensor", "occupancySensor"):
                 # Motion sensor: wrapper -> HA entity
-                sensor = dict_to_motion_sensor_x(device_data, self._hub)
+                sensor = dict_to_motion_sensor(device_data, self._hub)
                 device_wrapper = ikea_motion_sensor_device(self._hass, self._hub, sensor)
                 return ikea_motion_sensor(device_wrapper)
 

@@ -1,10 +1,10 @@
 """
 Issue #58: let Home Assistant stop a moving blind (cover.stop_cover).
 
-The hub accepts blindsState = "stopped" (dirigera API / library >= 1.4.0), but
-this integration is pinned to dirigera 1.2.6, whose Blind has no set_state().
-ikea_blinds_device therefore PATCHes the hub itself, and ikea_blinds_sensor
-advertises CoverEntityFeature.STOP so one button can start and stop a blind.
+The hub accepts blindsState = "stopped". ikea_blinds_device sends it through
+the library's Blind.set_state(BlindsStateEnum.STOPPED) (dirigera >= 1.3.0), and
+ikea_blinds_sensor advertises CoverEntityFeature.STOP so one button can start
+and stop a blind.
 
 What is guarded here:
 
@@ -45,6 +45,12 @@ class HomeAssistantError(Exception):
     pass
 
 
+class BlindsStateEnum(enum.Enum):
+    UP = "up"
+    DOWN = "down"
+    STOPPED = "stopped"
+
+
 class _StubDevice:
     """Stands in for ikea_base_device: keeps what the blinds classes rely on."""
 
@@ -82,6 +88,7 @@ def _load_classes():
         "core": SimpleNamespace(HomeAssistant=object),
         "Hub": object,
         "Blind": object,
+        "BlindsStateEnum": BlindsStateEnum,
         "CoverEntity": object,
         "CoverDeviceClass": SimpleNamespace(BLIND="blind"),
         "CoverEntityFeature": CoverEntityFeature,
@@ -135,6 +142,16 @@ def make_blind(can_receive=("blindsTargetLevel", "blindsState"), client=None,
         blind.moves.append(level),
         setattr(blind.attributes, "blinds_target_level", level),
     )
+
+    def set_state(state):
+        # Same order as dirigera's Blind.set_state: PATCH first, then the
+        # local model, so a failed request leaves blinds_state alone.
+        client.patch(f"/devices/{blind.id}", [{"attributes": {"blindsState": state.value}}])
+        blind.states.append(state)
+        blind.attributes.blinds_state = state.value
+
+    blind.states = []
+    blind.set_state = set_state
     return blind
 
 
@@ -156,6 +173,7 @@ def test_stop_patches_hub_with_blinds_state_stopped():
 
     run(entity.async_stop_cover())
 
+    assert blind.states == [BlindsStateEnum.STOPPED]
     assert client.calls == [
         ("/devices/blind-1", [{"attributes": {"blindsState": "stopped"}}])
     ]

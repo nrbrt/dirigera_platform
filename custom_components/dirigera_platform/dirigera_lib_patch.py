@@ -1,4 +1,5 @@
 from __future__ import annotations
+import copy
 from typing import List
 
 from dirigera import Hub
@@ -11,6 +12,25 @@ from dirigera.devices.motion_sensor import MotionSensor, dict_to_motion_sensor
 import logging
 
 logger = logging.getLogger("custom_components.dirigera_platform")
+
+
+def _split_sensor_primary_rank(device: dict) -> tuple:
+    """Sort key that puts the primary half of a split environment sensor first.
+
+    TIMMERFLOTTE reports as two environmentSensor devices sharing a
+    relationId: <rel>_1 (temperature, carries the user's name and room) and
+    <rel>_2 (humidity, generic name, no room). Prefer, in order: the one with
+    a temperature reading, the one with a room, the "_1" suffix, then the id
+    itself so the choice is stable whatever order the hub returns.
+    """
+    attributes = device.get("attributes") or {}
+    device_id = device.get("id") or ""
+    return (
+        attributes.get("currentTemperature") is None,
+        not device.get("room"),
+        not device_id.endswith("_1"),
+        device_id,
+    )
 
 
 def is_matter_device(device: dict) -> bool:
@@ -240,15 +260,21 @@ class HubX(Hub):
             if len(group) == 1:
                 merged.append(group[0])
             else:
-                # Multiple devices with same relationId — merge attributes
-                base = group[0].copy()
-                base_attrs = base.get("attributes", {})
+                # Multiple devices with same relationId — merge attributes.
+                # The hub's list order is not guaranteed, so pick the primary
+                # explicitly: it carries the user's name and room, and its id
+                # is what get_environment_sensor_by_id() and the entity
+                # unique_id are keyed on.
+                group = sorted(group, key=_split_sensor_primary_rank)
+                base = copy.deepcopy(group[0])
+                base_attrs = base.setdefault("attributes", {})
                 for other in group[1:]:
                     other_attrs = other.get("attributes", {})
                     for key, value in other_attrs.items():
                         if key not in base_attrs or base_attrs[key] is None:
-                            base_attrs[key] = value
-                base["attributes"] = base_attrs
+                            base_attrs[key] = copy.deepcopy(value)
+                    if not base.get("room") and other.get("room"):
+                        base["room"] = copy.deepcopy(other["room"])
                 logger.debug(
                     f"Merged {len(group)} environment sensor devices for "
                     f"'{base_attrs.get('customName', '?')}' (relationId: {rel_id})"

@@ -31,6 +31,7 @@ from .const import (
     DISCOVERY_COORDINATOR,
 )
 from .hub_event_listener import hub_event_listener
+from .stale_devices import async_remove_stale_devices, is_stale, known_identifiers
 from .device_discovery import DeviceDiscoveryCoordinator, set_discovery_coordinator
 
 PLATFORMS_TO_SETUP = [  Platform.SWITCH, 
@@ -384,6 +385,15 @@ async def async_setup_entry(
         # longer clobbers the first listener, and unload stops the right one.
         hass.data[DOMAIN][entry.entry_id]["hub_events"] = hub_events
 
+        # Catches devices that left the hub while Home Assistant was stopped;
+        # deviceRemoved events cover the ones that go while it runs. In the
+        # background, so setup does not wait for a second /devices fetch.
+        entry.async_create_background_task(
+            hass,
+            async_remove_stale_devices(hass, entry.entry_id, hub_basic),
+            "dirigera_platform stale device check",
+        )
+
     logger.debug("Complete async_setup_entry...")
 
     return True
@@ -445,8 +455,19 @@ async def async_remove_config_entry_device(
     config_entry: config_entries.ConfigEntry,
     device_entry: config_entries.DeviceEntry,
 ) -> bool:
+    """Let the user delete a device only when the hub no longer has it.
 
-    logger.info("Got request to remove device")
-    logger.info(config_entry)
-    logger.info(device_entry)
-    return True
+    A device that is still on the hub comes back on the next start, so deleting
+    it would only look like it worked. When the hub cannot be asked, keep it.
+    """
+    data = config_entry.data
+    hub = Hub(data[CONF_TOKEN], data[CONF_IP_ADDRESS])
+    try:
+        known = known_identifiers(await hass.async_add_executor_job(hub.get, "/devices"))
+    except Exception as ex:
+        logger.warning("Cannot check the hub before removing a device: %s", ex)
+        return False
+    if known is None:
+        logger.warning("Cannot check the hub before removing a device: no device list")
+        return False
+    return is_stale(device_entry, known)

@@ -608,13 +608,21 @@ class hub_event_listener(threading.Thread):
                         logger.debug(f"deviceAdded event without discovery coordinator or type: {msg}")
                 return
 
-            # Log deviceRemoved events for now (entities will become unavailable)
+            # deviceRemoved: rerun the stale-device comparison against a fresh
+            # /devices instead of removing this id blindly. A split device only
+            # goes once its last half is gone from the hub.
             if msg['type'] == "deviceRemoved":
                 if "data" in msg and "id" in msg['data']:
-                    device_id = msg['data']['id']
-                    logger.info(f"Device removed event received: {device_id}")
-                    # Note: The entity will remain in HA but become unavailable
-                    # Full removal requires manual deletion in HA UI or a restart
+                    logger.info(f"Device removed event received: {msg['data']['id']}")
+                    if self._request_to_stop or self._loop.is_closed():
+                        return
+                    # Imported here: the tests load this module standalone.
+                    from .stale_devices import async_remove_stale_devices
+                    self._loop.call_soon_threadsafe(
+                        lambda: self._hass.async_create_task(
+                            async_remove_stale_devices(self._hass, self._config_entry_id, self._hub)
+                        )
+                    )
                 return
 
             if msg['type'] != "deviceStateChanged":

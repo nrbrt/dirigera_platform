@@ -136,6 +136,21 @@ class device_set_model:
         logger.debug(f"Adding {bulb.name} to device_set : {self.name}")
         self._lights.append(bulb)
 
+def brightness_to_hub_level(brightness) -> int:
+    """HA brightness (0-255) to the hub's lightLevel (1-100).
+
+    Rounded, not truncated, both ways: truncating turned a scene's 158 into
+    61 % and back into 155. Clamped because HA brightness 1-2 rounds to 0."""
+    return max(1, min(100, round(brightness * 100 / 255)))
+
+
+def hub_level_to_brightness(level):
+    """The hub's lightLevel (1-100) to HA brightness (0-255)."""
+    if level is None:
+        return None
+    return round(level * 255 / 100)
+
+
 class ikea_bulb(LightEntity):
     
     def __init__(self, hub, json_data : Light) -> None:
@@ -244,10 +259,7 @@ class ikea_bulb(LightEntity):
     
     @property
     def brightness(self):
-        # This is called by HASS so should be in the range
-        # of 0-255
-        scaled = int((self.light_level/ 100) * 255)
-        return scaled
+        return hub_level_to_brightness(self.light_level)
 
     @property
     def light_level(self):
@@ -256,13 +268,7 @@ class ikea_bulb(LightEntity):
 
     @light_level.setter
     def light_level(self, value):
-        # value is HASS brightness (0-255); the hub expects 1-100
-        scaled = int((value/255)*100)
-        if scaled < 1:
-            scaled = 1
-        elif scaled > 100:
-            scaled = 100
-        self._json_data.attributes.light_level = scaled
+        self._json_data.attributes.light_level = brightness_to_hub_level(value)
 
     @property
     def max_color_temp_kelvin(self):
@@ -520,9 +526,7 @@ class ikea_bulb_device_set(LightEntity):
                 logger.debug("Request to device_set set brightness...")
                 level = int(kwargs[ATTR_BRIGHTNESS])
 
-                # Clamp to the hub's 1-100 range: HA brightness 1-2 would
-                # otherwise scale to lightLevel 0, which is out of range.
-                scaled = max(1, min(100, round(level * 100 / 255)))
+                scaled = brightness_to_hub_level(level)
                 logger.debug("Set brightness : {}".format(level))
                 logger.debug("Set scaled brightness : {}".format(scaled))
                 await self.hass.async_add_executor_job(self.patch_command, {"lightLevel" : scaled})

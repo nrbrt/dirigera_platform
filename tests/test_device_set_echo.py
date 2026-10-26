@@ -25,6 +25,7 @@ def _turn_on():
         tree = ast.parse(fh.read())
     cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "ikea_bulb_device_set")
     fn = next(n for n in cls.body if isinstance(n, ast.AsyncFunctionDef) and n.name == "async_turn_on")
+    helper = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "brightness_to_hub_level")
     ns = {
         "ATTR_BRIGHTNESS": "brightness",
         "ATTR_COLOR_TEMP_KELVIN": "color_temp_kelvin",
@@ -34,7 +35,7 @@ def _turn_on():
         "DOMAIN": "dirigera_platform",
         "logger": logging.getLogger(__name__),
     }
-    exec(compile(ast.fix_missing_locations(ast.Module(body=[fn], type_ignores=[])), LIGHT, "exec"), ns)
+    exec(compile(ast.fix_missing_locations(ast.Module(body=[helper, fn], type_ignores=[])), LIGHT, "exec"), ns)
     return ns["async_turn_on"]
 
 

@@ -31,6 +31,7 @@ def listener():
     saved = L.device_registry
     L.device_registry = {"hk": {"abc_1": hel.registry_entry(entity)}}
     hel.controller_trigger_last_time_map.clear()
+    hel.remotes_with_press_events.clear()
     me = object.__new__(L)
     me._hub_key = "hk"
     me._hass = SimpleNamespace(bus=bus)
@@ -38,6 +39,7 @@ def listener():
     yield me, fired
     L.device_registry = saved
     hel.controller_trigger_last_time_map.clear()
+    hel.remotes_with_press_events.clear()
 
 
 def _scene():
@@ -172,3 +174,71 @@ def test_scene_without_any_trigger_time_still_fires(two_remotes, triggered_at):
         trig["triggeredAt"] = triggered_at
     L.on_message(me, None, json.dumps({"type": "sceneUpdated", "data": {"triggers": [trig]}}))
     assert fired == [("dev1", "button1_single_click")]
+
+
+# Third part of #65, from a full press matrix on two BILRESA remotes sharing
+# scenes. (1) The hub leaves triggeredAt out for a button or pattern never
+# used; falling back to the scene-level lastTriggered made such a trigger fire
+# for a remote nobody pressed. (2) For a long press the scene fires when the
+# hold is recognised and remotePressEvent comes on release, seconds later, so
+# no time window can merge the two.
+
+def _trig(dev, pattern, at=None):
+    t = {"type": "controller", "trigger": {"controllerType": "shortcutController",
+                                           "clickPattern": pattern, "buttonIndex": 0, "deviceId": dev}}
+    if at is not None:
+        t["triggeredAt"] = _ts(at)
+    return t
+
+
+def _scene_with(msg_time, last_triggered, *triggers):
+    return json.dumps({"type": "sceneUpdated", "time": _ts(msg_time), "data": {
+        "lastTriggered": _ts(last_triggered), "triggers": [{"type": "app"}, *triggers]}})
+
+
+def _press_msg(at, dev, pattern):
+    return json.dumps({"type": "remotePressEvent", "time": _ts(at),
+                       "data": {"id": dev, "clickPattern": pattern}})
+
+
+def test_trigger_never_used_does_not_fire(two_remotes):
+    # Row 5: A single pressed; B's double has no triggeredAt yet. The second
+    # sceneUpdated has a current lastTriggered.
+    me, fired = two_remotes
+    ms = datetime.timedelta(milliseconds=1)
+    t0 = datetime.datetime.now(datetime.timezone.utc)
+    L.on_message(me, None, _scene_with(t0 + 348 * ms, t0 + 62 * ms,
+                                       _trig(OTHER, "doublePress"), _trig(PRESSED, "singlePress", t0 + 42 * ms)))
+    assert fired == [("dev1", "button1_single_click")]
+
+
+def test_unused_pattern_of_the_pressed_remote_does_not_fire(two_remotes):
+    # Row 13: B single pressed, B's own never-used double came along.
+    me, fired = two_remotes
+    ms = datetime.timedelta(milliseconds=1)
+    t0 = datetime.datetime.now(datetime.timezone.utc)
+    L.on_message(me, None, _scene_with(t0 + 300 * ms, t0 + 60 * ms,
+                                       _trig(PRESSED, "singlePress", t0 + 40 * ms), _trig(PRESSED, "doublePress")))
+    assert fired == [("dev1", "button1_single_click")]
+
+
+def test_long_hold_fires_once_for_a_remote_that_sends_press_events(two_remotes):
+    # Row 4: scene at hold recognition, remotePressEvent 5.4 s later on release.
+    me, fired = two_remotes
+    t0 = datetime.datetime.now(datetime.timezone.utc)
+    L.on_message(me, None, _press_msg(t0 - datetime.timedelta(minutes=1), PRESSED, "singlePress"))
+    fired.clear()
+    L.on_message(me, None, _scene_with(t0 + datetime.timedelta(milliseconds=80), t0,
+                                       _trig(PRESSED, "longPress", t0)))
+    L.on_message(me, None, _press_msg(t0 + datetime.timedelta(seconds=5.4), PRESSED, "longPress"))
+    assert fired == [("dev1", "button1_long_press")]
+
+
+def test_scene_path_stays_for_a_remote_without_press_events(two_remotes):
+    me, fired = two_remotes
+    t0 = datetime.datetime.now(datetime.timezone.utc)
+    L.on_message(me, None, _press_msg(t0 - datetime.timedelta(minutes=1), PRESSED, "singlePress"))
+    fired.clear()
+    L.on_message(me, None, _scene_with(t0 + datetime.timedelta(milliseconds=80), t0,
+                                       _trig(PRESSED, "singlePress", t0), _trig(OTHER, "singlePress", t0)))
+    assert fired == [("dev2", "button1_single_click")]

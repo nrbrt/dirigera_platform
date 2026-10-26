@@ -68,6 +68,8 @@ process_events_from = {
 }
 
 controller_trigger_last_time_map = {}
+# HA device ids of remotes seen sending remotePressEvent (see _fire_controller_event).
+remotes_with_press_events = set()
 DEBOUNCE_DELTA = datetime.timedelta(seconds=1)
 # A scene trigger whose time is older than this, relative to the sceneUpdated
 # message, belongs to an earlier press.
@@ -422,15 +424,19 @@ class hub_event_listener(threading.Thread):
         # A sceneUpdated lists every controller trigger of the scene, each with
         # its own triggeredAt. Only a trigger that fired for this message is a
         # press; the others are history, e.g. another remote with the same
-        # scene on that button. triggeredAt is preferred over the scene-level
-        # lastTriggered: the hub sends two sceneUpdated per press and the
-        # first still carries the previous lastTriggered (#65).
+        # scene on that button. A trigger without triggeredAt never fired:
+        # the hub leaves it out for a button or pattern not used yet (#65).
+        # The scene-level lastTriggered is only used for firmware that sends
+        # no triggeredAt at all; the hub sends two sceneUpdated per press and
+        # the first still carries the previous lastTriggered.
         data = msg.get("data")
         if data is None or "triggers" not in data:
             logger.warning(f"discarding sceneUpdated without data/triggers: {msg}")
             return
 
         msg_time = _parse_hub_time(msg.get("time"))
+        controller_triggers = [t for t in data["triggers"] if t.get("type") == "controller"]
+        has_trigger_times = any(t.get("triggeredAt") for t in controller_triggers)
         for trigger in data["triggers"]:
             if trigger.get("type") != "controller":
                 logger.debug(f"Trigger type : {trigger.get('type')} not controller ignoring...")
@@ -441,7 +447,13 @@ class hub_event_listener(threading.Thread):
                 logger.debug(f"trigger not from a shortcutController, ignoring : {trigger}")
                 continue
 
-            pressed_at = _parse_hub_time(trigger.get("triggeredAt") or data.get("lastTriggered"))
+            if has_trigger_times:
+                if not trigger.get("triggeredAt"):
+                    logger.debug(f"trigger never fired, ignoring : {trigger}")
+                    continue
+                pressed_at = _parse_hub_time(trigger["triggeredAt"])
+            else:
+                pressed_at = _parse_hub_time(data.get("lastTriggered"))
             if pressed_at is None:
                 # No trigger time at all: still fire, debounced on the message time.
                 pressed_at = msg_time or datetime.datetime.now(datetime.timezone.utc)
@@ -449,7 +461,7 @@ class hub_event_listener(threading.Thread):
                 logger.debug(f"trigger last fired at {pressed_at}, not part of this update, ignoring...")
                 continue
 
-            self._fire_controller_event(details["deviceId"], details.get("clickPattern"), pressed_at)
+            self._fire_controller_event(details["deviceId"], details.get("clickPattern"), pressed_at, from_scene=True)
 
         # Apply scene action attributes to light entities
         # Some bulbs only send colorMode in deviceStateChanged after a scene,
@@ -531,12 +543,18 @@ class hub_event_listener(threading.Thread):
         pressed_at = _parse_hub_time(msg.get("time")) or datetime.datetime.now(datetime.timezone.utc)
         self._fire_controller_event(data["id"], data["clickPattern"], pressed_at)
 
-    def _fire_controller_event(self, device_id, click_pattern, pressed_at):
+    def _fire_controller_event(self, device_id, click_pattern, pressed_at, from_scene=False):
         """
         Fire one dirigera_platform_event per physical press. Both the
-        remotePressEvent and the sceneUpdated path end here, so a press that
-        produces both, or a sceneUpdated that arrives twice, fires once.
-        pressed_at is a tz-aware hub timestamp.
+        remotePressEvent and the sceneUpdated path end here.
+
+        A remote that sends remotePressEvent has one source of truth for its
+        presses, so the scene path stands down for it: the two cannot be
+        matched by time, because for a long press the scene fires when the
+        hold is recognised and remotePressEvent only on release (#65). The
+        scene path stays for remotes that never send remotePressEvent. Until a
+        remote's first remotePressEvent after a restart, the debounce below
+        still merges the two. pressed_at is a tz-aware hub timestamp.
         """
         trigger_type = CLICK_PATTERNS.get(click_pattern)
         if trigger_type is None:
@@ -555,6 +573,12 @@ class hub_event_listener(threading.Thread):
             logger.debug(f"id : {device_id_for_registry} not a controller in the registry, ignoring...")
             return
         entity = registry_value.entity
+        ha_device_id = entity.registry_entry.device_id
+        if from_scene and ha_device_id in remotes_with_press_events:
+            logger.debug(f"{ha_device_id} sends remotePressEvent, ignoring its scene trigger")
+            return
+        if not from_scene:
+            remotes_with_press_events.add(ha_device_id)
 
         # Debounce: the hub reports one press more than once (IKEA bug
         # workaround). Only a fired press is stored, so the map never moves

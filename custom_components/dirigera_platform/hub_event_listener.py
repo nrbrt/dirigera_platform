@@ -9,6 +9,7 @@ import ssl
 from typing import Any
 import datetime
 from dateutil import parser
+from pydantic import TypeAdapter
 from dirigera import Hub
 from dirigera.devices.device import Room
 
@@ -33,39 +34,6 @@ def get_device_by_identifier(device_reg, identifier, config_entry_id):
 logger = logging.getLogger("custom_components.dirigera_platform.hub_event_listener")
 
 DATE_TIME_FORMAT:str =  "%Y-%m-%dT%H:%M:%S.%fZ"
-
-process_events_from = {
-    "motionSensor"    :     ["isDetected","isOn","batteryPercentage","customName"],
-    "occupancySensor" :     ["isDetected","isOn","batteryPercentage","customName"],
-    "outlet"          :     [   "isOn",
-                                "currentAmps",
-                                "currentActivePower",
-                                "currentVoltage",
-                                "totalEnergyConsumed",
-                                "energyConsumedAtLastReset",
-                                "timeOfLastEnergyReset",
-                                "totalEnergyConsumedLastUpdated",
-                                "customName"],
-    "electricalSensor":     [   "currentAmps",
-                                "currentActivePower",
-                                "currentVoltage",
-                                "totalEnergyConsumed",
-                                "energyConsumedAtLastReset",
-                                "timeOfLastEnergyReset",
-                                "totalEnergyConsumedLastUpdated"],
-    "light"           :     ["isOn", "lightLevel", "colorTemperature", "colorHue", "colorSaturation", "colorMode", "customName"],
-    "openCloseSensor" :     ["isOpen","batteryPercentage","customName"],
-    "waterSensor"     :     ["waterLeakDetected","batteryPercentage","customName"],
-    "blinds"          :     ["blindsCurrentLevel","batteryPercentage","customName"],
-    "lightSensor"     :     ["illuminance","batteryPercentage","customName"],
-    "environmentSensor":    [   "currentTemperature",
-                                "currentRH",
-                                "currentPM25",
-                                "currentCO2",
-                                "vocIndex",
-                                "batteryPercentage",
-                                "customName"]
-}
 
 controller_trigger_last_time_map = {}
 # HA device ids of remotes seen sending remotePressEvent (see _fire_controller_event).
@@ -95,6 +63,33 @@ def _parse_hub_time(value):
 
 def to_snake_case(name:str) -> str:
     return re.sub(r'(?<!^)(?=[A-Z])', '_', name).lower()
+
+# --- Applying hub attributes to an entity's model -----------------------------
+#
+# Which attributes an event may change used to be a fixed list per deviceType.
+# Types missing from it (remotes, air purifiers) were dropped whole and missing
+# attributes were dropped silently: #167, #153. The entity's own attributes model
+# is the authority instead: an attribute is applied when the model has a field
+# for it, and the value goes through that field's validation, so datetimes,
+# times and enums get their real type rather than the raw JSON string.
+
+_NO_FIELD = object()
+_field_adapters = {}
+_misfit_warned = set()
+
+
+def _field_value(model, name, raw):
+    """raw as the type of the model's field `name`, or _NO_FIELD when the model
+    has no such field. Raises ValueError when raw does not fit the field."""
+    fields = getattr(type(model), "model_fields", None)
+    if not fields or name not in fields:
+        return _NO_FIELD
+    key = (type(model), name)
+    adapter = _field_adapters.get(key)
+    if adapter is None:
+        adapter = _field_adapters[key] = TypeAdapter(fields[name].annotation)
+    return adapter.validate_python(raw)
+
 
 # --- #45: protect TOTAL_INCREASING energy sensors from spurious dips ---------
 #
@@ -195,6 +190,43 @@ def _hold_back_energy_decrease(entity, key_attr, value_to_set) -> bool:
         f"timeOfLastEnergyReset (issue #45); holding {held}/{ENERGY_DECREASE_ACCEPT_AFTER}"
     )
     return True
+
+def _apply_attributes(entity, attributes, own_device=True):
+    """Write every hub attribute the entity's model has a field for.
+
+    own_device is False for an event of another part of a split device that is
+    routed to this entity (BILRESA _2, GRILLPLATS _2). That part keeps its own
+    name on the hub, so its customName must not rename this entity; its battery
+    and energy values are the reason it is routed here. Returns the hub keys
+    that were written."""
+    model = getattr(getattr(entity, "_json_data", None), "attributes", None)
+    if model is None:
+        return set()
+    # Read before anything is written (see #45).
+    energy_reset_advanced = _energy_reset_advanced(entity, attributes)
+    applied = set()
+    for key, raw in attributes.items():
+        if key == "customName" and not own_device:
+            continue
+        key_attr = to_snake_case(key)
+        try:
+            value = _field_value(model, key_attr, raw)
+        except ValueError as ex:
+            warn_key = (type(model), key_attr)
+            if warn_key not in _misfit_warned:
+                _misfit_warned.add(warn_key)
+                logger.warning(f"Keeping the old {key_attr} of {entity._json_data.id}, the hub sent {raw!r} which does not fit the model: {ex}")
+            continue
+        if value is _NO_FIELD:
+            logger.debug(f"attribute {key} is not on the model of {entity._json_data.id}, ignoring")
+            continue
+        if key in ENERGY_TOTAL_ATTRS and not energy_reset_advanced:
+            if _hold_back_energy_decrease(entity, key_attr, value):
+                continue
+        setattr(model, key_attr, value)
+        applied.add(key)
+    return applied
+
 
 class registry_entry:
     def __init__(self, entity:any, cascade_entity:any = None):
@@ -494,20 +526,8 @@ class hub_event_listener(threading.Thread):
 
             entity = registry_value.entity
 
-            # Only process light-relevant attributes from scene actions
-            light_attrs = ["isOn", "lightLevel", "colorTemperature", "colorHue", "colorSaturation"]
-            updated = False
-
-            for key in attributes:
-                if key not in light_attrs:
-                    continue
-                try:
-                    key_attr = to_snake_case(key)
-                    logger.debug(f"Scene action: setting {key_attr} to {attributes[key]} on {device_id}")
-                    setattr(entity._json_data.attributes, key_attr, attributes[key])
-                    updated = True
-                except Exception as ex:
-                    logger.warning(f"Scene action: failed to set {key} on {device_id}: {ex}")
+            applied = _apply_attributes(entity, attributes)
+            updated = bool(applied)
 
             # Update color_mode based on scene attributes.
             # Only apply a mode the entity actually supports — Dirigera scene
@@ -659,6 +679,7 @@ class hub_event_listener(threading.Thread):
             
             info = msg['data'] 
             id = info['id']
+            event_id = id
 
             device_type = None
             if "deviceType" in info:
@@ -670,10 +691,6 @@ class hub_event_listener(threading.Thread):
                 return
 
             logger.debug(f"device type of message {device_type}")
-            if device_type not in process_events_from:
-                # To avoid issues been reported. If we dont have it in our list
-                # then best to not process this event
-                return
 
             if id not in self._own_registry():
                 # Split-device routing: try to find parent entity for unregistered devices
@@ -716,10 +733,13 @@ class hub_event_listener(threading.Thread):
                         return
                     # Unknown device - try to discover it
                     if self._discovery_coordinator is not None:
-                        logger.info(f"Unknown device detected: {id} (type: {device_type}), triggering discovery")
+                        # Same split as at startup: remotes are recognised by
+                        # type, every other device by deviceType.
+                        discovery_type = "controller" if info.get("type") == "controller" else device_type
+                        logger.debug(f"Unknown device detected: {id} (type: {discovery_type}), triggering discovery")
                         self._loop.call_soon_threadsafe(
                             lambda: self._hass.async_create_task(
-                                self._discovery_coordinator.discover_device(id, device_type)
+                                self._discovery_coordinator.discover_device(id, discovery_type)
                             )
                         )
                     else:
@@ -783,7 +803,6 @@ class hub_event_listener(threading.Thread):
                     logger.error(f"Failed to set room on device: {id} for msg: {msg}")
                     logger.error(ex)
 
-            to_process_attr = process_events_from[device_type]
             turn_on_off = False
             has_attributes = "attributes" in info and info["attributes"] is not None
             name_changed = False
@@ -792,53 +811,15 @@ class hub_event_listener(threading.Thread):
 
             if has_attributes:
                 attributes = info["attributes"]
-                # Read before the loop writes anything (see #45).
-                energy_reset_advanced = _energy_reset_advanced(entity, attributes)
+                old_name = getattr(entity._json_data.attributes, "custom_name", None)
+                applied = _apply_attributes(entity, attributes, own_device=(event_id == entity._json_data.id))
+                # This is a hack need a better impl
+                turn_on_off = "isOn" in applied
+                # Track name changes for device registry update
+                if "customName" in applied and attributes["customName"] != old_name:
+                    name_changed = True
+                    new_name = attributes["customName"]
 
-                for key in attributes:
-                    if key not in to_process_attr:
-                        logger.debug(f"attribute {key} with value {attributes[key]} not in list of device type {device_type}, ignoring update...")
-                        continue
-                    try:
-                        key_attr = to_snake_case(key)
-                        if key == "colorMode":
-                            # Drives _color_mode below; only stored on the model
-                            # when it carries the field (dirigera >= 1.6.0 Light).
-                            if hasattr(entity._json_data.attributes, "color_mode"):
-                                entity._json_data.attributes.color_mode = attributes[key]
-                            continue
-                        # This is a hack need a better impl
-                        if key_attr == "is_on":
-                            turn_on_off = True
-                        # Track name changes for device registry update
-                        if key == "customName":
-                            old_name = entity._json_data.attributes.custom_name
-                            if old_name != attributes[key]:
-                                name_changed = True
-                                new_name = attributes[key]
-                        logger.debug(f"setting {key_attr}  to {attributes[key]}")
-                        logger.debug(f"Entity before setting: {entity._json_data}")
-
-                        value_to_set = attributes[key]
-                        #Need a hack for outlet with date/time entities
-                        if key in ["timeOfLastEnergyReset","totalEnergyConsumedLastUpdated"]:
-                            logger.debug(f"Got into date/time so will set the value accordingly...")
-                            try :
-                                value_to_set = parser.parse(attributes[key])
-                            except:
-                                #Ignore the exception
-                                logger.warning(f"Failed to convert {attributes[key]} to date/time...")
-
-                        if key in ENERGY_TOTAL_ATTRS and not energy_reset_advanced:
-                            if _hold_back_energy_decrease(entity, key_attr, value_to_set):
-                                continue
-
-                        setattr(entity._json_data.attributes,key_attr, value_to_set)
-                        logger.debug(f"Entity after setting: {entity._json_data}")
-                    except Exception as ex:
-                        logger.warning(f"Failed to set attribute key: {key} converted to {key_attr} on device: {id}")
-                        logger.warning(ex)
-                                
                 # Update color_mode for lights when color attributes change.
                 # Guard with _supported_color_modes so we never set a mode the
                 # entity cannot report (e.g. Tradfri Driver is brightness-only

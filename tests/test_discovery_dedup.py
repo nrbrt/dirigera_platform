@@ -120,3 +120,16 @@ def test_successful_device_is_discovered_once_and_not_marked_unsupported():
     assert dev_id not in coord._unsupported_device_ids, (
         "a successfully created device must never be cached as unsupported"
     )
+
+
+def test_device_type_without_platform_is_remembered():
+    """The hub itself (deviceType gateway) has no platform. Without the old
+    per-type event filter every gateway event reaches discovery, so the first
+    attempt must be remembered instead of repeating on every event."""
+    hub = FakeHub()
+    coord = DeviceDiscoveryCoordinator(FakeHass(), hub)
+
+    assert asyncio.run(coord.discover_device("gw_1", "gateway")) is False
+    assert "gw_1" in coord._unsupported_device_ids
+    assert asyncio.run(coord.discover_device("gw_1", "gateway")) is False
+    assert hub.get_calls == []

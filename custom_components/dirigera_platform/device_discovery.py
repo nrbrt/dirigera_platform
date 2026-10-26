@@ -133,7 +133,10 @@ class DeviceDiscoveryCoordinator:
             # Determine which platform handles this device type
             platform = DEVICE_TYPE_TO_PLATFORM.get(device_type)
             if platform is None:
-                logger.warning(f"Unknown device type '{device_type}' for device {device_id}, cannot discover")
+                # E.g. the hub itself (gateway). Remember it: without the old
+                # per-type event filter every event of it lands here.
+                self._unsupported_device_ids.add(device_id)
+                logger.debug(f"No platform for device type '{device_type}' of device {device_id}, not discovering")
                 return False
 
             # Check if we have a callback for this platform

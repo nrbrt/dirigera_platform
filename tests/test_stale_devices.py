@@ -43,10 +43,17 @@ _dr.async_get = lambda hass: _registry["current"]
 _dr.async_entries_for_config_entry = lambda reg, entry_id: [
     d for d in reg.devices.values() if entry_id in d.config_entries
 ]
+_entities = {"by_device": {}}
+_er = types.ModuleType("homeassistant.helpers.entity_registry")
+_er.async_get = lambda hass: _entities
+_er.async_entries_for_device = lambda reg, device_id, include_disabled_entities=False: \
+    reg["by_device"].get(device_id, [])
+sys.modules["homeassistant.helpers.entity_registry"] = _er
 _ha = sys.modules.setdefault("homeassistant", types.ModuleType("homeassistant"))
 _helpers = sys.modules.setdefault("homeassistant.helpers", types.ModuleType("homeassistant.helpers"))
 sys.modules["homeassistant.helpers.device_registry"] = _dr
 _helpers.device_registry = _dr
+_helpers.entity_registry = _er
 
 _path = os.path.join(os.path.dirname(__file__), "..", "custom_components",
                      "dirigera_platform", "stale_devices.py")
@@ -84,8 +91,9 @@ HUB = [
 ]
 
 
-def _run(devices, hub, dry_run):
+def _run(devices, hub, dry_run, entities=None):
     _registry["current"] = _FakeRegistry(devices)
+    _entities["by_device"] = entities or {}
     found = asyncio.run(sd.async_remove_stale_devices(_Hass(), "e1", hub, dry_run=dry_run))
     return found, _registry["current"]
 
@@ -250,3 +258,12 @@ def test_device_with_its_own_id_as_relation_id_is_not_superseded():
     hub = [{"id": "x_1", "relationId": "x_1"}]
     assert sd.superseded_identifiers(hub) == {}
     assert sd.known_identifiers(hub) == {"x_1"}
+
+
+def test_half_device_with_entities_left_is_kept():
+    # Entities of a platform that never loads stay on the half device; removing
+    # it would delete them, so it waits until it is empty.
+    found, reg = _run(_upstream_leftovers(), _Hub(SPLIT_HUB), dry_run=False,
+                      entities={"d-t1": ["sensor.slaapkamer_temperature"]})
+    assert sorted(reg.removed) == ["d-g1", "d-t2"]
+    assert "t_1" not in found

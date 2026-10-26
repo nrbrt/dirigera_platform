@@ -26,6 +26,7 @@ import logging
 from typing import Any, Iterable
 
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
 
 logger = logging.getLogger("custom_components.dirigera_platform.stale_devices")
 
@@ -135,7 +136,7 @@ def _carry_name_over(device_reg, entry_id: str, replaced: list[dr.DeviceEntry],
     for device in sorted(replaced, key=lambda d: sorted(_our_identifiers(d))):
         if not device.name_by_user:
             continue
-        target = by_identifier.get(superseded[_our_identifiers(device)[0]])
+        target = by_identifier.get(superseded[sorted(_our_identifiers(device))[0]])
         if target is None or target.name_by_user or target.id in named:
             continue
         device_reg.async_update_device(target.id, name_by_user=device.name_by_user)
@@ -169,6 +170,15 @@ async def async_remove_stale_devices(hass, entry_id: str, hub, dry_run: bool = D
 
     superseded = superseded_identifiers(raw)
     gone, replaced = split_stale(stale, superseded)
+    # A superseded device that still has entities keeps them until they load
+    # and move to the relationId device. They may never load (a deselected
+    # platform), and removing the device would delete them with their entity
+    # ids and settings, so leave it until it is empty.
+    entity_reg = er.async_get(hass)
+    replaced = [
+        device for device in replaced
+        if not er.async_entries_for_device(entity_reg, device.id, include_disabled_entities=True)
+    ]
 
     def _names(devices):
         return ", ".join(

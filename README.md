@@ -12,7 +12,7 @@ Contributions are welcome, feel free to open [issues](https://github.com/nrbrt/d
 
 - **Dynamic Device Discovery** : devices added, removed, renamed, or moved to a different room in the IKEA Home app are automatically reflected in Home Assistant without a restart
 - **Split-Device Merging** : newer IKEA devices (GRILLPLATS, TOFSMYGGA, TIMMERFLOTTE, MYGGSPRAY) expose as multiple API devices linked by `relationId`; the integration automatically merges them into single HA entities
-- **Real-Time Updates** : full WebSocket event support for instant state changes across all device types
+- **Real-Time Updates** : WebSocket events for lights, outlets, sensors, blinds and remote button presses (air purifier state and remote battery levels are not pushed yet and refresh on a reload)
 - **Resilient Connection** : application-level WebSocket keepalive reduces hub "inactivity" disconnects, and all device state is automatically re-synced on every reconnect, so entities never silently go stale after the hub drops the connection
 - **Reliable Startup** : automatic retry on connection failure (`ConfigEntryNotReady`) instead of requiring manual reloads
 - **Selective Import** : choose which platforms this integration sets up. If another integration such as Matter already covers your lights and plugs, import only what it does not, and the entities and devices of a deselected platform are hidden rather than left behind as unavailable ghosts
@@ -24,25 +24,35 @@ If you arrived here from an open issue on [sanjoyg/dirigera_platform](https://gi
 
 | Upstream issue | Title | Fixed in |
 |----------------|-------|----------|
-| [#155](https://github.com/sanjoyg/dirigera_platform/issues/155) | Integration failed setup on 2025.6.0 | v0.2.7 (`ConfigEntryNotReady` retry + deprecated `hass.loop` migration) |
+| [#94](https://github.com/sanjoyg/dirigera_platform/issues/94) | Setup fails when `isOn` is missing | v0.2.0 (also in upstream 2.7.1) |
+| [#142](https://github.com/sanjoyg/dirigera_platform/issues/142) | `'NoneType' object has no attribute 'loop'` flood | v0.3.9 (hub pushes skip entities that were never added to Home Assistant) |
+| [#148](https://github.com/sanjoyg/dirigera_platform/issues/148) | Energy Consumed at Last Reset not updating | v0.2.5 (electricalSensor events routed to the outlet) |
+| [#150](https://github.com/sanjoyg/dirigera_platform/issues/150) | Duplicate Devices with Matter & HACS | v0.3.17 / v0.3.18 (the duplicates come from running both integrations against the same hardware; "Platforms to import" and "Skip Matter over Thread devices" let you import only what Matter does not cover) |
+| [#152](https://github.com/sanjoyg/dirigera_platform/issues/152) | IKEA Inspelning (plug with power sensor) | v0.2.5 (outlet + electricalSensor split-device merge) |
+| [#156](https://github.com/sanjoyg/dirigera_platform/issues/156) | Not properly starting up with HA (two hubs) | v0.3.5 / v0.3.8 (per-hub gateway, discovery and device registry) |
+| [#159](https://github.com/sanjoyg/dirigera_platform/issues/159) | Two dirigera hub integrations block each other | v0.3.5 / v0.3.8 (per-hub gateway, discovery and device registry) |
 | [#160](https://github.com/sanjoyg/dirigera_platform/issues/160) | TRADFRI on/off switch - not properly integrated | v0.2.6 (multi-button scene-creation per controller half) |
+| [#164](https://github.com/sanjoyg/dirigera_platform/issues/164) | VALLHORN motion sensor: wrong icon | v0.3.21 (`motion` device class) |
 | [#165](https://github.com/sanjoyg/dirigera_platform/issues/165) | VALLHORN motion sensor not providing illuminance | v0.2.1 (separate light sensor entities with lux conversion) |
-| [#168](https://github.com/sanjoyg/dirigera_platform/issues/168) | Disconnected due to inactivity | v0.2.11/12 (application-level WebSocket keepalive) |
-| [#175](https://github.com/sanjoyg/dirigera_platform/issues/175) | MotionSensor fails setup when batteryPercentage is missing | v0.2.1 (`batteryPercentage` made optional) |
-| [#177](https://github.com/sanjoyg/dirigera_platform/issues/177) | Styrbar 4-button - no events | v0.2.6 (per-button scene creation) |
+| [#168](https://github.com/sanjoyg/dirigera_platform/issues/168) | Disconnected due to inactivity | v0.2.12 (application-level WebSocket keepalive; v0.3.7 re-syncs all state after a reconnect) |
+| [#175](https://github.com/sanjoyg/dirigera_platform/issues/175) | MotionSensor fails setup when batteryPercentage is missing | v0.2.0 (`batteryPercentage` made optional) |
+| [#180](https://github.com/sanjoyg/dirigera_platform/issues/180) | The integration hangs up | v0.2.12 / v0.3.7 (keepalive, state re-sync on reconnect) |
 | [#183](https://github.com/sanjoyg/dirigera_platform/issues/183) | MYGGSPRAY motion sensor not visible | upstream 2.7.1 + v0.2.16 (battery-sensor dedup unique to this fork) |
-| [#184](https://github.com/sanjoyg/dirigera_platform/issues/184) | BILRESA dual button - no activities | v0.2.6 (dual-button to controller map + scenes) |
+| [#184](https://github.com/sanjoyg/dirigera_platform/issues/184) | BILRESA dual button - no activities | v0.2.6 (dual-button to controller map + scenes); v0.3.24 fixes a press firing twice on a button that also has a scene |
 | [#195](https://github.com/sanjoyg/dirigera_platform/issues/195) | Lights can't be used as automation triggers | v0.2.9 (merged upstream PR #197) |
 | [#198](https://github.com/sanjoyg/dirigera_platform/issues/198) | `ikea_bulb_device_set` has no attribute 'entity' | v0.2.8 (merged upstream PR #196) |
-| [#152](https://github.com/sanjoyg/dirigera_platform/issues/152) | IKEA Inspelning (plug with power sensor) | v0.2.5 (outlet + electricalSensor split-device merge) |
-| [#148](https://github.com/sanjoyg/dirigera_platform/issues/148) | Energy Consumed at Last Reset not updating | v0.2.5 (electricalSensor events routed to outlet) |
-| [#150](https://github.com/sanjoyg/dirigera_platform/issues/150) | Duplicate Devices with Matter & HACS | v0.3.17 (the duplicates come from running both integrations against the same hardware, so this fork cannot prevent them at the source, but "Platforms to import" lets you import only what Matter does not already cover) |
+| [#203](https://github.com/sanjoyg/dirigera_platform/issues/203) | Unsupported color mode hs on brightness-only bulbs | v0.2.15 (colour mode guarded against unsupported modes) |
+| [#204](https://github.com/sanjoyg/dirigera_platform/issues/204) | TOFSMYGGA smart plug not discovered | v0.2.0 (plug and electricalSensor merged into one device) |
+| [#205](https://github.com/sanjoyg/dirigera_platform/issues/205) | Hub auth token written to the log | v0.3.0 (no token or `user_input` in the logs; step messages at debug level) |
 
 ### Not addressed (out of scope or different root cause)
 
 - [#143](https://github.com/sanjoyg/dirigera_platform/issues/143), *Power factor for Inspelning*: the Dirigera API does not expose `currentPowerFactor`; would require a user-configurable correction factor + derived sensor, not a code fix.
-- [#194](https://github.com/sanjoyg/dirigera_platform/issues/194), *TIMMERFLOTTE humidity sensor*: TIMMERFLOTTE temperature works (split-device merging), humidity needs separate device support: not yet implemented.
-- New device support requests (STARKVIND quirks, VINDYKSTRA air quality, Matter device coverage, etc.) are out of scope for this fork's reliability focus.
+- [#167](https://github.com/sanjoyg/dirigera_platform/issues/167), *Remote battery status not updated*: still present; remote battery levels refresh only on a reload. A fix is in review.
+- [#177](https://github.com/sanjoyg/dirigera_platform/issues/177), *STYRBAR 4 buttons*: the hub reports all four STYRBAR buttons as button 1, so the integration cannot tell them apart. This is a hub limitation.
+- [#194](https://github.com/sanjoyg/dirigera_platform/issues/194), *TIMMERFLOTTE*: the two halves (temperature and humidity) are merged into one device since v0.2.0. Still open: the room comes from whichever half the hub lists first (a fix is in review), and humidity has 1% precision because the library reads it as a whole number.
+- [#153](https://github.com/sanjoyg/dirigera_platform/issues/153), *STARKVIND air quality*: the air-quality value is not exposed as an entity yet, and air purifier state is not pushed live.
+- New device support requests (VINDYKSTRA air quality, Matter device coverage, etc.) are out of scope for this fork's reliability focus.
 
 ## Supported Devices
 
@@ -55,8 +65,8 @@ If you arrived here from an open issue on [sanjoyg/dirigera_platform](https://gi
 | **Open/Close Sensors** | PARASOLL, MYGGBETT | |
 | **Environment Sensors** | VINDSTYRKA (PM2.5, VOC), ALPSTUGA (CO2), TIMMERFLOTTE | Split-device pairs auto-merged; `state_class: measurement` for Long Term Statistics |
 | **Blinds** | FYRTUR, KADRILJ | |
-| **Remotes** | STYRBAR, RODRET, SOMRIG, BILRESA | `remotePressEvent` + `shortcutController` support; automation triggers for all buttons |
-| **Air Purifiers** | STARKVIND | Native unit of measurement fix |
+| **Remotes** | STYRBAR, RODRET, SOMRIG, BILRESA | `remotePressEvent` + `shortcutController` support; automation triggers per button (STYRBAR: the hub reports all four buttons as button 1) |
+| **Air Purifiers** | STARKVIND | Native unit of measurement fix; state refreshes on reload, not live yet |
 | **Water Sensors** | BADRING | |
 | **Scenes** | All Dirigera scenes | Exposed as entities with Activate button |
 
@@ -84,8 +94,6 @@ Or manually:
 3. When prompted, press the **action button** on the Dirigera hub, then click Submit
 4. Your devices will appear automatically
 
-To test with mock devices, enter `mock` as the IP address.
-
 ## Options
 
 Open **Configure** on the integration to change these. Saving no longer asks you to press the hub's action button: as long as the hub address is unchanged and the stored token still works, the options are saved straight away.
@@ -93,6 +101,7 @@ Open **Configure** on the integration to change these. Saving no longer asks you
 | Option | Default | What it does |
 |--------|---------|--------------|
 | **Platforms to import** | all seven | Which device types get entities. Clearing a platform hides its existing entities and, where a device has nothing left, the device itself. They are disabled rather than deleted, so renames, area assignments and history survive; re-select the platform and they come back with the same entity IDs. A device that still has an entity on a selected platform stays visible, so switching off Sensors does not take a motion sensor or a metering plug with it. Anything you disabled by hand is never touched. |
+| **Skip Matter over Thread devices** | off | Leaves out the devices the hub commissioned over Matter, for when you already import those through the Matter integration. Zigbee devices are unaffected. |
 | **Hide Device Set Bulbs** | on | Hides the hub's bulb groups, which otherwise duplicate the individual lights |
 | **Power sensor push throttle** | 60s | Minimum interval between recorder writes for the high-frequency push sensors. This is a floor, not an exact interval. Set 0 to disable. |
 
@@ -129,7 +138,7 @@ See [Releases](https://github.com/nrbrt/dirigera_platform/releases) for a full c
 - **v0.3.11** (2026-07-09) Fix: stop the WebSocket listener from pushing HA state during shutdown once the event loop is closed (issue [#42](https://github.com/nrbrt/dirigera_platform/issues/42)). The listener runs on its own thread and keeps handling hub events for a few seconds after Home Assistant has already closed its asyncio loop; every event that reached `schedule_update_ha_state` in that window raised `RuntimeError: Event loop is closed` and was logged as a warning with a full traceback, once per incoming event. `on_message` now checks `_request_to_stop`/`loop.is_closed()` before scheduling the update, the same guard the keepalive path already used, so shutdown stays quiet. Normal operation is unchanged. Thanks to @m3gg3 for the precise root-cause analysis and the ready-made patch.
 - **v0.3.10** (2026-07-01) Throttle HA state pushes for outlet power sensors (issue [#40](https://github.com/nrbrt/dirigera_platform/issues/40)). Smart plugs with power metering push `currentActivePower`/`currentAmps` over the WebSocket roughly every 8 seconds, so the current amps, active power and voltage sensors wrote about 10,800 recorder rows per day per entity. Each of those sensors now rate-limits its HA state push to a minimum interval (default 60s, cutting it to about 1,440 rows/day). The sensor's internal value is still updated on every push, so `native_value` keeps returning the live reading and only the recorder write is skipped. The interval is configurable in the integration options ("Power sensor push throttle"); set it to 0 to disable throttling. Energy totals (`total_energy_consumed`, `TOTAL_INCREASING`) are unaffected. Thanks to @m3gg3 for the detailed analysis and the ready-made patch.
 - **v0.3.9** (2026-06-30) Fix: guard the device state-update cascade against listeners that were never added to Home Assistant (issue [#41](https://github.com/nrbrt/dirigera_platform/issues/41)). A device fans a hub push out to its sensor listeners via `schedule_update_ha_state`; a listener that was registered but never added to HA has `hass=None`, so HA dereferences `self.hass.loop` and raises `AttributeError`. That surfaced as a flood of "error processing hub event" warnings, typically on outlets and electrical sensors pushing power readings every few seconds. The cascade now skips listeners with no `hass`, which is behaviour-neutral since an entity not registered with HA cannot receive a push anyway.
-- **v0.3.8** (2026-06-24) Fix: per-hub device registry (issue [#39](https://github.com/nrbrt/dirigera_platform/issues/39)). The device registry was a single shared dict and `stop()` cleared all of it, so with two hubs, unloading or reloading one config entry wiped the other hub's registrations too. After that, every event for the other hub's devices came in as an unknown device and its state was never applied, so those devices stopped updating entirely (not tied to one device type). The registry is now keyed per hub, so reloading one hub no longer affects another. The device registry was a single shared dict and `stop()` cleared all of it, so with two hubs, unloading or reloading one config entry wiped the other hub's registrations too. After that, every event for the other hub's devices came in as an unknown device and its state was never applied, so those devices stopped updating entirely (not tied to one device type). The registry is now keyed per hub, so reloading one hub no longer affects another.
+- **v0.3.8** (2026-06-24) Fix: per-hub device registry (issue [#39](https://github.com/nrbrt/dirigera_platform/issues/39)). The device registry was a single shared dict and `stop()` cleared all of it, so with two hubs, unloading or reloading one config entry wiped the other hub's registrations too. After that, every event for the other hub's devices came in as an unknown device and its state was never applied, so those devices stopped updating entirely (not tied to one device type). The registry is now keyed per hub, so reloading one hub no longer affects another.
 - **v0.3.7** (2026-06-24) Fix: re-sync all device state on WebSocket reconnect (issue [#39](https://github.com/nrbrt/dirigera_platform/issues/39)). Dirigera hubs drop the event WebSocket fairly often; on reconnect the integration only waited for new events and never re-pulled current state, so any change made during the disconnect gap was lost and entities silently went stale over time, affecting every device type, not just one. (A config reload worked around it because a reload re-fetches all state.) On reconnect the integration now fetches `/devices` once and replays each device through the normal update path, with discovery suppressed during the replay. No more manual reloads.
 - **v0.3.6** (2026-06-24) Fix: stop the runtime re-discovery loop for devices without an entity (issue [#39](https://github.com/nrbrt/dirigera_platform/issues/39)). State events for environment-sensor sub-channels that have no HA entity triggered a full hub lookup on every event with no caching, hundreds of redundant `/devices/{id}` calls and a wall of "discovery not yet implemented" log lines. Such devices are now remembered after the first failed attempt, so subsequent events short-circuit.
 - **v0.3.5** (2026-06-23) Fix: support multiple Dirigera hubs (issue [#39](https://github.com/nrbrt/dirigera_platform/issues/39)). The device list and discovery coordinator were kept in a single shared slot, so with two hubs the second overwrote the first at startup (devices went missing, IDs collided). Both are now stored per config entry, so multiple hubs no longer step on each other.

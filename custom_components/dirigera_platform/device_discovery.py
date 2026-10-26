@@ -55,6 +55,7 @@ class DeviceDiscoveryCoordinator:
         # environmentSensor _2 sub-channel that has no parent to route to -- does
         # not re-trigger a blocking /devices fetch on every event. See issue #39.
         self._unsupported_device_ids: set = set()
+        self._unsupported_types: set = set()
 
     def register_platform_callback(self, platform: str, callback: Callable) -> None:
         """
@@ -121,7 +122,7 @@ class DeviceDiscoveryCoordinator:
             logger.debug(f"Device {device_id} already known, skipping discovery")
             return False
 
-        if device_id in self._unsupported_device_ids:
+        if device_id in self._unsupported_device_ids or (device_id, device_type) in self._unsupported_types:
             logger.debug(f"Device {device_id} previously unsupported, skipping re-discovery")
             return False
 
@@ -134,8 +135,10 @@ class DeviceDiscoveryCoordinator:
             platform = DEVICE_TYPE_TO_PLATFORM.get(device_type)
             if platform is None:
                 # E.g. the hub itself (gateway). Remember it: without the old
-                # per-type event filter every event of it lands here.
-                self._unsupported_device_ids.add(device_id)
+                # per-type event filter every event of it lands here. Keyed on
+                # the type too, so a later event with a type we do handle
+                # still gets discovered.
+                self._unsupported_types.add((device_id, device_type))
                 logger.debug(f"No platform for device type '{device_type}' of device {device_id}, not discovering")
                 return False
 
@@ -296,13 +299,13 @@ class DeviceDiscoveryCoordinator:
             elif device_type == "environmentSensor":
                 # Environment sensor: creates multiple entities, handled differently
                 # For now, skip - these need special handling (temp, humidity, PM25, etc.)
-                logger.warning(f"Environment sensor discovery not yet implemented for {device_data.get('id')}")
+                logger.warning(f"Environment sensor discovery not yet implemented for {device_data.get('id')}, reload the integration to add it")
                 return None
 
             elif device_type == "controller":
                 # Controller: creates battery sensor, handled in sensor.py
                 # For now, skip - needs special handling
-                logger.warning(f"Controller discovery not yet implemented for {device_data.get('id')}")
+                logger.warning(f"Controller discovery not yet implemented for {device_data.get('id')}, reload the integration to add it")
                 return None
 
             elif device_type in ("motionSensor", "occupancySensor"):

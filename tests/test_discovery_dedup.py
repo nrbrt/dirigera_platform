@@ -130,6 +130,19 @@ def test_device_type_without_platform_is_remembered():
     coord = DeviceDiscoveryCoordinator(FakeHass(), hub)
 
     assert asyncio.run(coord.discover_device("gw_1", "gateway")) is False
-    assert "gw_1" in coord._unsupported_device_ids
+    assert ("gw_1", "gateway") in coord._unsupported_types
     assert asyncio.run(coord.discover_device("gw_1", "gateway")) is False
     assert hub.get_calls == []
+
+
+def test_a_later_event_with_a_handled_type_is_still_discovered():
+    hub = FakeHub()
+    coord = DeviceDiscoveryCoordinator(FakeHass(), hub)
+    coord.register_platform_callback("sensor", lambda entities: None)
+
+    async def _real_entity(device_type, device_data):
+        return object()
+
+    coord._create_entity = _real_entity
+    assert asyncio.run(coord.discover_device("new_1", "sensor")) is False
+    assert asyncio.run(coord.discover_device("new_1", "lightSensor")) is True

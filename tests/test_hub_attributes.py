@@ -296,3 +296,28 @@ def test_own_part_clears_the_room():
     _register(remote, "remote_1")
     _listener().on_message(None, _room_event("remote_1", None))
     assert remote._json_data.room is None
+
+
+def test_misfit_warning_once_per_device(caplog):
+    hel._misfit_warned.clear()
+    plugs = [_Entity(f"plug_{n}", _make(OutletAttributes, custom_name="P", is_on=True)) for n in (1, 2)]
+    hub_event_listener.unregister_hub(HUB_KEY)
+    for plug in plugs:
+        hub_event_listener.device_registry.setdefault(HUB_KEY, {})[plug.unique_id] = hel.registry_entry(plug)
+    listener = _listener()
+    for _ in range(2):
+        for plug in plugs:
+            listener.on_message(None, _event(plug.unique_id, "outlet", isOn=None))
+    assert caplog.text.count("does not fit the model") == 2
+
+
+def test_an_attribute_that_raises_does_not_drop_the_rest(monkeypatch):
+    plug = _Entity("plug_1", _make(OutletAttributes, custom_name="P", is_on=False))
+    _register(plug, "plug_1")
+    real = hel._hold_back_energy_decrease
+    def boom(entity, key_attr, value):
+        raise RuntimeError("boom")
+    monkeypatch.setattr(hel, "_hold_back_energy_decrease", boom)
+    _listener().on_message(None, _event("plug_1", "outlet", totalEnergyConsumed=1.0, isOn=True))
+    assert plug._json_data.attributes.is_on is True
+    assert plug.pushes == 1

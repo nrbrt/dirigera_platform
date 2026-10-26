@@ -211,20 +211,24 @@ def _apply_attributes(entity, attributes, own_device=True):
         key_attr = to_snake_case(key)
         try:
             value = _field_value(model, key_attr, raw)
+            if value is _NO_FIELD:
+                logger.debug(f"attribute {key} is not on the model of {entity._json_data.id}, ignoring")
+                continue
+            if key in ENERGY_TOTAL_ATTRS and not energy_reset_advanced:
+                if _hold_back_energy_decrease(entity, key_attr, value):
+                    continue
+            setattr(model, key_attr, value)
+            applied.add(key)
         except ValueError as ex:
-            warn_key = (type(model), key_attr)
+            # Once per device and field, or a value shape the hub keeps
+            # sending would log on every event.
+            warn_key = (entity._json_data.id, key_attr)
             if warn_key not in _misfit_warned:
                 _misfit_warned.add(warn_key)
                 logger.warning(f"Keeping the old {key_attr} of {entity._json_data.id}, the hub sent {raw!r} which does not fit the model: {ex}")
-            continue
-        if value is _NO_FIELD:
-            logger.debug(f"attribute {key} is not on the model of {entity._json_data.id}, ignoring")
-            continue
-        if key in ENERGY_TOTAL_ATTRS and not energy_reset_advanced:
-            if _hold_back_energy_decrease(entity, key_attr, value):
-                continue
-        setattr(model, key_attr, value)
-        applied.add(key)
+        except Exception as ex:
+            # One bad attribute must not drop the rest of the event.
+            logger.warning(f"Failed to set {key} on {entity._json_data.id}: {ex}")
     return applied
 
 
@@ -495,11 +499,16 @@ class hub_event_listener(threading.Thread):
 
             self._fire_controller_event(details["deviceId"], details.get("clickPattern"), pressed_at, from_scene=True)
 
-        # Apply scene action attributes to light entities
         # Some bulbs only send colorMode in deviceStateChanged after a scene,
-        # without the actual color values. The sceneUpdated event contains the
-        # full attributes in its actions, so we apply them here.
-        self._apply_scene_actions(msg)
+        # without the actual color values, so the scene's actions are applied
+        # as state. Only when the scene ran for this message: a sceneUpdated
+        # also arrives when a scene is edited, and its actions are a target,
+        # not what the devices do.
+        ran_at = _parse_hub_time(data.get("lastTriggered"))
+        if msg_time is None or ran_at is None or msg_time - ran_at <= STALE_TRIGGER_DELTA:
+            self._apply_scene_actions(msg)
+        else:
+            logger.debug(f"scene last ran at {ran_at}, not applying its actions")
 
     def _apply_scene_actions(self, msg):
         """Apply attributes from scene actions to the corresponding entities."""

@@ -136,6 +136,7 @@ def _listener(discovered=None):
     listener._loop = SimpleNamespace(call_soon_threadsafe=lambda f: f(), is_closed=lambda: False)
     listener._hass = SimpleNamespace(async_create_task=lambda result: result)
     listener._update_device_name = lambda device_id, name: None
+    listener._update_device_area = lambda device_id, room: None
     return listener
 
 
@@ -256,3 +257,42 @@ def test_scene_action_uses_the_same_path():
     ]}})
     assert plug._json_data.attributes.is_on is True
     assert plug.pushes == 1
+
+
+def test_other_half_does_not_erase_the_battery():
+    # Review of the refactor: a half replaying batteryPercentage null wiped the
+    # primary's level (80 -> None) once the type filter no longer stopped it.
+    remote = _remote(battery=80)
+    _register(remote, "remote_1", "remote_2")
+    _listener().on_message(None, _event("remote_2", "genericSwitch", batteryPercentage=None))
+    assert remote._json_data.attributes.battery_percentage == 80
+
+
+def test_own_null_is_still_applied():
+    remote = _remote(battery=80)
+    _register(remote, "remote_1")
+    _listener().on_message(None, _event("remote_1", "lightController", batteryPercentage=None))
+    assert remote._json_data.attributes.battery_percentage is None
+
+
+def _room_event(device_id, room):
+    return json.dumps({"type": "deviceStateChanged", "data": {
+        "id": device_id, "deviceType": "genericSwitch", "room": room}})
+
+
+def test_other_half_does_not_clear_the_room():
+    # The hub keeps the room on one part only (seen on a live hub for BILRESA,
+    # GRILLPLATS and MYGGSPRAY).
+    remote = _remote()
+    remote._json_data.room = "Hal"
+    _register(remote, "remote_1", "remote_2")
+    _listener().on_message(None, _room_event("remote_2", None))
+    assert remote._json_data.room == "Hal"
+
+
+def test_own_part_clears_the_room():
+    remote = _remote()
+    remote._json_data.room = "Hal"
+    _register(remote, "remote_1")
+    _listener().on_message(None, _room_event("remote_1", None))
+    assert remote._json_data.room is None

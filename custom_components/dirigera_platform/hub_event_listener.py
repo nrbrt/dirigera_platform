@@ -195,10 +195,10 @@ def _apply_attributes(entity, attributes, own_device=True):
     """Write every hub attribute the entity's model has a field for.
 
     own_device is False for an event of another part of a split device that is
-    routed to this entity (BILRESA _2, GRILLPLATS _2). That part keeps its own
-    name on the hub, so its customName must not rename this entity; its battery
-    and energy values are the reason it is routed here. Returns the hub keys
-    that were written."""
+    routed to this entity (BILRESA _2, GRILLPLATS _2). Such a part adds what it
+    measures (battery, energy), which is why it is routed here, but it does not
+    erase or rename: its nulls and its customName (each part keeps its own name
+    on the hub) are skipped. Returns the hub keys that were written."""
     model = getattr(getattr(entity, "_json_data", None), "attributes", None)
     if model is None:
         return set()
@@ -206,7 +206,7 @@ def _apply_attributes(entity, attributes, own_device=True):
     energy_reset_advanced = _energy_reset_advanced(entity, attributes)
     applied = set()
     for key, raw in attributes.items():
-        if key == "customName" and not own_device:
+        if not own_device and (key == "customName" or raw is None):
             continue
         key_attr = to_snake_case(key)
         try:
@@ -748,6 +748,8 @@ class hub_event_listener(threading.Thread):
 
             registry_value = hub_event_listener.get_registry_entry(self._hub_key, id)
             entity = registry_value.entity
+            # False for another part of a split device routed to this entity.
+            own_device = event_id == entity._json_data.id
 
             reachability_changed = False
             if "isReachable" in info:
@@ -761,7 +763,9 @@ class hub_event_listener(threading.Thread):
 
             # Process room updates (room info comes as separate field, not in attributes)
             room_changed = False
-            if "room" in info:
+            # The hub keeps the room on one part of a split device; another
+            # part may set it but not clear it.
+            if "room" in info and (own_device or info["room"] is not None):
                 try:
                     room_data = info["room"]
                     if room_data is not None:
@@ -812,7 +816,7 @@ class hub_event_listener(threading.Thread):
             if has_attributes:
                 attributes = info["attributes"]
                 old_name = getattr(entity._json_data.attributes, "custom_name", None)
-                applied = _apply_attributes(entity, attributes, own_device=(event_id == entity._json_data.id))
+                applied = _apply_attributes(entity, attributes, own_device=own_device)
                 # This is a hack need a better impl
                 turn_on_off = "isOn" in applied
                 # Track name changes for device registry update

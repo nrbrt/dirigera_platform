@@ -139,17 +139,12 @@ class dirigera_platform_config_flow(config_entries.ConfigFlow, domain=DOMAIN):
                 self._abort_if_unique_id_configured()
                 try:
                     logger.debug("Moving to second step....")
-                    if self.ip == "mock":
-                        logger.warning(
-                            "Using mock ip, skipping token generation step 1"
-                        )
-                    else:
-                        (
-                            self.code,
-                            self.code_verifier,
-                        ) = await core.async_get_hass().async_add_executor_job(
-                            get_dirigera_token_step_one, self.ip
-                        )
+                    (
+                        self.code,
+                        self.code_verifier,
+                    ) = await core.async_get_hass().async_add_executor_job(
+                        get_dirigera_token_step_one, self.ip
+                    )
                     return self.async_show_form(
                         step_id="action", data_schema=NULL_SCHEMA, errors=errors
                     )
@@ -173,14 +168,10 @@ class dirigera_platform_config_flow(config_entries.ConfigFlow, domain=DOMAIN):
 
         # Try and get the token step_2
         try:
-            if self.ip == "mock":
-                logger.warning("Using mock ip, skipping token generation step 2")
-                token = "mock"
-            else:
-                token = await core.async_get_hass().async_add_executor_job(
-                    get_dirigera_token_step_two, self.ip, self.code, self.code_verifier
-                )
-                logger.info("Successful generating token")
+            token = await core.async_get_hass().async_add_executor_job(
+                get_dirigera_token_step_two, self.ip, self.code, self.code_verifier
+            )
+            logger.info("Successful generating token")
 
             user_input[CONF_IP_ADDRESS] = self.ip
             user_input[CONF_TOKEN] = token
@@ -246,8 +237,7 @@ class OptionsFlowHandler(config_entries.OptionsFlowWithConfigEntry):
                     # needlessly painful. Any doubt falls back to pairing.
                     stored = dict(self.config_entry.data)
                     if (
-                        self.ip != "mock"
-                        and self.ip == stored.get(CONF_IP_ADDRESS)
+                        self.ip == stored.get(CONF_IP_ADDRESS)
                         and stored.get(CONF_TOKEN)
                         and await core.async_get_hass().async_add_executor_job(
                             token_still_works, self.ip, stored[CONF_TOKEN]
@@ -260,17 +250,12 @@ class OptionsFlowHandler(config_entries.OptionsFlowWithConfigEntry):
                         return self._store(stored[CONF_TOKEN])
 
                     logger.debug("Moving to second step....")
-                    if self.ip == "mock":
-                        logger.warning(
-                            "Using mock ip, skipping token generation step 1"
-                        )
-                    else:
-                        (
-                            self.code,
-                            self.code_verifier,
-                        ) = await core.async_get_hass().async_add_executor_job(
-                            get_dirigera_token_step_one, self.ip
-                        )
+                    (
+                        self.code,
+                        self.code_verifier,
+                    ) = await core.async_get_hass().async_add_executor_job(
+                        get_dirigera_token_step_one, self.ip
+                    )
                     return self.async_show_form(
                         step_id="action", data_schema=NULL_SCHEMA, errors=errors
                     )
@@ -324,14 +309,10 @@ class OptionsFlowHandler(config_entries.OptionsFlowWithConfigEntry):
         logger.debug(f"hide device set bulbs {self.hide_device_set_bulbs}")
         # Try and get the token step_2
         try:
-            if self.ip == "mock":
-                logger.warning("Using mock ip, skipping token generation step 2")
-                token = "mock"
-            else:
-                token = await core.async_get_hass().async_add_executor_job(
-                    get_dirigera_token_step_two, self.ip, self.code, self.code_verifier
-                )
-                logger.info("Successful generating token")
+            token = await core.async_get_hass().async_add_executor_job(
+                get_dirigera_token_step_two, self.ip, self.code, self.code_verifier
+            )
+            logger.info("Successful generating token")
 
             user_input[CONF_IP_ADDRESS] = self.ip
             user_input[CONF_TOKEN] = token

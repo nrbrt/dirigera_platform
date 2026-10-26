@@ -181,99 +181,96 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         token = config_data[CONF_TOKEN]
         
         logger.info("--------------")
-        if ip == "mock":
-            logger.info("{ MOCK JSON }")
-        else:
-            hub = dirigera.Hub(token, ip)
-            json_resp = hub.get("/devices")
-            logger.debug(f"TYPE IS {type(json_resp)}")
-            #import json 
-            #devices_json = json.loads(json_resp)
-            # Sanitize the dump
-                    
-            master_id_map = {}
-            id_counter = 1
-            for device_json in json_resp:
-                if "id" in device_json:
-                    id_value = device_json["id"]
-                    id_to_replace = id_counter 
-                    
-                    if id_value in master_id_map:
-                        id_to_replace = master_id_map[id_value]
-                    else:
-                        id_counter = id_counter + 1
-                        master_id_map[id_value] = id_to_replace
-                    
-                    device_json["id"] = id_to_replace
-                    
-                if "relationId" in device_json:
-                    id_value = device_json["relationId"]
-                    id_to_replace = id_counter
+        hub = dirigera.Hub(token, ip)
+        json_resp = hub.get("/devices")
+        logger.debug(f"TYPE IS {type(json_resp)}")
+        #import json 
+        #devices_json = json.loads(json_resp)
+        # Sanitize the dump
+                
+        master_id_map = {}
+        id_counter = 1
+        for device_json in json_resp:
+            if "id" in device_json:
+                id_value = device_json["id"]
+                id_to_replace = id_counter 
+                
+                if id_value in master_id_map:
+                    id_to_replace = master_id_map[id_value]
+                else:
+                    id_counter = id_counter + 1
+                    master_id_map[id_value] = id_to_replace
+                
+                device_json["id"] = id_to_replace
+                
+            if "relationId" in device_json:
+                id_value = device_json["relationId"]
+                id_to_replace = id_counter
 
-                    if id_value in master_id_map:
-                        id_to_replace = master_id_map[id_value]
-                    else:
-                        id_counter = id_counter + 1
-                        master_id_map[id_value] = id_to_replace
+                if id_value in master_id_map:
+                    id_to_replace = master_id_map[id_value]
+                else:
+                    id_counter = id_counter + 1
+                    master_id_map[id_value] = id_to_replace
 
-                    # used to overwrite "id" again, leaving relationId unsanitized
-                    device_json["relationId"] = id_to_replace
+                # used to overwrite "id" again, leaving relationId unsanitized
+                device_json["relationId"] = id_to_replace
+            
+            if "attributes" in device_json and "serialNumber" in device_json["attributes"]:
+                id_value = device_json["attributes"]["serialNumber"]
+                id_to_replace = id_counter 
                 
-                if "attributes" in device_json and "serialNumber" in device_json["attributes"]:
-                    id_value = device_json["attributes"]["serialNumber"]
-                    id_to_replace = id_counter 
-                    
-                    if id_value in master_id_map:
-                        id_to_replace = master_id_map[id_value]
-                    else:
-                        id_counter = id_counter + 1
-                        master_id_map[id_value] = id_to_replace
-                    
-                    device_json["attributes"]["serialNumber"] = id_to_replace
+                if id_value in master_id_map:
+                    id_to_replace = master_id_map[id_value]
+                else:
+                    id_counter = id_counter + 1
+                    master_id_map[id_value] = id_to_replace
                 
-                if "room" in device_json and "id" in device_json["room"]:
-                    id_value = device_json["room"]["id"]
-                    id_to_replace = id_counter 
-                    
-                    if id_value in master_id_map:
-                        id_to_replace = master_id_map[id_value]
-                    else:
-                        id_counter = id_counter + 1
-                        master_id_map[id_value] = id_to_replace
-                    
-                    device_json["room"]["id"] = id_to_replace
+                device_json["attributes"]["serialNumber"] = id_to_replace
+            
+            if "room" in device_json and "id" in device_json["room"]:
+                id_value = device_json["room"]["id"]
+                id_to_replace = id_counter 
                 
-                if "deviceSet" in device_json:
-                    for device_set in device_json["deviceSet"]:
-                        if "id" in device_set:
-                            id_value = device_set["id"]
-                            id_to_replace = id_counter 
-                            
-                            if id_value in master_id_map:
-                                id_to_replace = master_id_map[id_value]
-                            else:
-                                id_counter = id_counter + 1
-                                master_id_map[id_value] = id_to_replace
-                            
-                            device_set["id"]= id_to_replace
+                if id_value in master_id_map:
+                    id_to_replace = master_id_map[id_value]
+                else:
+                    id_counter = id_counter + 1
+                    master_id_map[id_value] = id_to_replace
                 
-                # remoteLinks is a list of device-id strings. The old code
-                # tested for the literal "remote_link" (never true), would
-                # KeyError when the key was absent, and read a stale loop
-                # variable from the deviceSet block above.
-                if "remoteLinks" in device_json and device_json["remoteLinks"]:
-                    sanitized_links = []
-                    for remote_link in device_json["remoteLinks"]:
-                        if remote_link in master_id_map:
-                            id_to_replace = master_id_map[remote_link]
+                device_json["room"]["id"] = id_to_replace
+            
+            if "deviceSet" in device_json:
+                for device_set in device_json["deviceSet"]:
+                    if "id" in device_set:
+                        id_value = device_set["id"]
+                        id_to_replace = id_counter 
+                        
+                        if id_value in master_id_map:
+                            id_to_replace = master_id_map[id_value]
                         else:
-                            id_to_replace = id_counter
                             id_counter = id_counter + 1
-                            master_id_map[remote_link] = id_to_replace
-                        sanitized_links.append(id_to_replace)
-                    device_json["remoteLinks"] = sanitized_links
-                
-            logger.info(json_resp)
+                            master_id_map[id_value] = id_to_replace
+                        
+                        device_set["id"]= id_to_replace
+            
+            # remoteLinks is a list of device-id strings. The old code
+            # tested for the literal "remote_link" (never true), would
+            # KeyError when the key was absent, and read a stale loop
+            # variable from the deviceSet block above.
+            if "remoteLinks" in device_json and device_json["remoteLinks"]:
+                sanitized_links = []
+                for remote_link in device_json["remoteLinks"]:
+                    if remote_link in master_id_map:
+                        id_to_replace = master_id_map[remote_link]
+                    else:
+                        id_to_replace = id_counter
+                        id_counter = id_counter + 1
+                        master_id_map[remote_link] = id_to_replace
+                    sanitized_links.append(id_to_replace)
+                device_json["remoteLinks"] = sanitized_links
+            
+        logger.info(json_resp)
         logger.info("--------------")
 
 
@@ -368,31 +365,30 @@ async def async_setup_entry(
     # Now lets start the event listener
     hub_basic = Hub(hass_data[CONF_TOKEN], hass_data[CONF_IP_ADDRESS])
 
-    if hass_data[CONF_IP_ADDRESS] != "mock":
-        hub_events = hub_event_listener(hub_basic, hass, discovery, entry.entry_id)
-        hub_events.start()
-        try:
-            # Sync device names and areas from Dirigera to HA device registry
-            # This ensures names and areas are set correctly after HA restart
-            await hub_events.sync_all_device_names()
-            await hub_events.sync_all_device_areas()
-        except Exception:
-            # Setup is about to fail — without this, the listener thread kept
-            # running and every ConfigEntryNotReady retry started another one.
-            await hass.async_add_executor_job(hub_events.stop)
-            raise
-        # Per-entry storage instead of a module global: a second hub entry no
-        # longer clobbers the first listener, and unload stops the right one.
-        hass.data[DOMAIN][entry.entry_id]["hub_events"] = hub_events
+    hub_events = hub_event_listener(hub_basic, hass, discovery, entry.entry_id)
+    hub_events.start()
+    try:
+        # Sync device names and areas from Dirigera to HA device registry
+        # This ensures names and areas are set correctly after HA restart
+        await hub_events.sync_all_device_names()
+        await hub_events.sync_all_device_areas()
+    except Exception:
+        # Setup is about to fail — without this, the listener thread kept
+        # running and every ConfigEntryNotReady retry started another one.
+        await hass.async_add_executor_job(hub_events.stop)
+        raise
+    # Per-entry storage instead of a module global: a second hub entry no
+    # longer clobbers the first listener, and unload stops the right one.
+    hass.data[DOMAIN][entry.entry_id]["hub_events"] = hub_events
 
-        # Catches devices that left the hub while Home Assistant was stopped;
-        # deviceRemoved events cover the ones that go while it runs. In the
-        # background, so setup does not wait for a second /devices fetch.
-        entry.async_create_background_task(
-            hass,
-            async_remove_stale_devices(hass, entry.entry_id, hub_basic),
-            "dirigera_platform stale device check",
-        )
+    # Catches devices that left the hub while Home Assistant was stopped;
+    # deviceRemoved events cover the ones that go while it runs. In the
+    # background, so setup does not wait for a second /devices fetch.
+    entry.async_create_background_task(
+        hass,
+        async_remove_stale_devices(hass, entry.entry_id, hub_basic),
+        "dirigera_platform stale device check",
+    )
 
     logger.debug("Complete async_setup_entry...")
 

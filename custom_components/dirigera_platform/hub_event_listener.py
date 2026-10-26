@@ -68,6 +68,28 @@ process_events_from = {
 }
 
 controller_trigger_last_time_map = {}
+DEBOUNCE_DELTA = datetime.timedelta(seconds=1)
+# A scene trigger whose time is older than this, relative to the sceneUpdated
+# message, belongs to an earlier press.
+STALE_TRIGGER_DELTA = datetime.timedelta(seconds=5)
+CLICK_PATTERNS = {
+    "singlePress": "single_click",
+    "longPress": "long_press",
+    "doublePress": "double_click",
+}
+
+def _parse_hub_time(value):
+    """Parse a hub timestamp to a tz-aware datetime, None if absent or unusable."""
+    if value is None:
+        return None
+    try:
+        parsed = parser.parse(value)
+    except (ValueError, OverflowError, TypeError) as ex:
+        logger.warning(f"Failed to parse hub time {value!r}: {ex}")
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=datetime.timezone.utc)
+    return parsed
 
 def to_snake_case(name:str) -> str:
     return re.sub(r'(?<!^)(?=[A-Z])', '_', name).lower()
@@ -397,112 +419,37 @@ class hub_event_listener(threading.Thread):
         logger.debug(f"on_error hub event listener {ws_msg}")
     
     def parse_scene_update(self, msg):
-        global controller_trigger_last_time_map
-        # Verify that this is controller initiated
-        if "data" not in msg:
-            logger.warning(f"discarding message as key 'data' not found: {msg}")
-            return 
-        
-        if "triggers" not in msg["data"]:
-            logger.warning(f"discarding message as key 'data/triggers'")
-            return 
-        
-        triggers = msg["data"]["triggers"]
-        
-        for trigger in triggers:
-            if "type" not in trigger:
-                logger.warning(f"key 'type' not in trigger json : {trigger}")
-                continue
-            
-            if trigger["type"] != "controller":
-                logger.debug(f"Trigger type : {trigger['type']} not controller ignoring...")
-                continue
-            
-            if "trigger" not in trigger:
-                logger.warning(f"key 'trigger' not found in trigger json: {trigger}")
-                continue 
-            
-            details = trigger["trigger"]
-            
-            if "controllerType" not in details or "clickPattern" not in details or "deviceId" not in details:
-                logger.debug(f"Required key controllerType/clickPattern/deviceId not in trigger json : {trigger}")
-                continue  
-            
-            controller_type = details["controllerType"]
-            click_pattern = details["clickPattern"]
-            device_id = details["deviceId"]
-            
-            if controller_type != "shortcutController":
-                logger.debug(f"controller type on message not compatible: {controller_type}, ignoring...")
-                continue 
-            
-            if click_pattern == "singlePress":
-                trigger_type = "single_click"
-            elif click_pattern == "longPress":
-                trigger_type = "long_press"
-            elif click_pattern == "doublePress":
-                trigger_type = "double_click"
-            else:
-                logger.debug(f"click_pattern : {click_pattern} not in list of types...ignoring")
-                continue
-            
-            device_id_for_registry = device_id
-             
-            button_idx = 0
-            pattern = '(([0-9]|[a-z]|-)*)_([0-9])+'
-            match = re.search(pattern, device_id)
-            if match is not None:
-                device_id_for_registry = f"{match.groups()[0]}_1"
-                button_idx = int(match.groups()[2])
-                logger.debug(f"Multi button controller, device_id effective : {device_id_for_registry} with buttons : {button_idx}")
-                
-            if button_idx != 0:
-                trigger_type =f"button{button_idx}_{trigger_type}"
-            
-            # Now look up the associated entity in our own registry
-            registry_value = hub_event_listener.get_registry_entry(self._hub_key, device_id_for_registry)
-            
-            if registry_value.__class__.__name__ != "registry_entry":
-                logger.debug(f"id : {device_id_for_registry} listener registry is not correct : {registry_value.__class__.__name__}...")
-                continue
-            
-            entity  = registry_value.entity
-            
-            unique_key = f"{entity.registry_entry.device_id}_{trigger_type}"
-            # last_fired stays None when this key never fired — first events
-            # must not be debounced. The map is shared with
-            # parse_remote_press_event and must only hold tz-aware datetimes:
-            # hub timestamps here, aware UTC now() there. A naive value makes
-            # the aware-minus-naive comparison raise TypeError (#65).
-            last_fired = controller_trigger_last_time_map.get(unique_key)
-            if last_fired is not None:
-                logger.debug(f"Found date/time in map for controller : {last_fired}")
+        # A sceneUpdated lists every controller trigger of the scene, each with
+        # its own triggeredAt. Only a trigger that fired for this message is a
+        # press; the others are history, e.g. another remote with the same
+        # scene on that button. triggeredAt is preferred over the scene-level
+        # lastTriggered: the hub sends two sceneUpdated per press and the
+        # first still carries the previous lastTriggered (#65).
+        data = msg.get("data")
+        if data is None or "triggers" not in data:
+            logger.warning(f"discarding sceneUpdated without data/triggers: {msg}")
+            return
 
-            if "lastTriggered" in msg["data"]:
-                current_triggered_str = msg["data"]["lastTriggered"]
-                try: 
-                    current_triggered = parser.parse(current_triggered_str)
-                    one_second_delta = datetime.timedelta(seconds=1)
-                    controller_trigger_last_time_map[unique_key] = current_triggered
-                    logger.debug(f"Updated date/time in map for controller with : {current_triggered}")    
-                    if last_fired is not None and one_second_delta > current_triggered - last_fired:
-                        logger.debug("Will not let this event be fired, this is to get over bug IKEA bug of firing event twice for controller")
-                        return 
-                    
-                except Exception as ex:
-                    logger.warning(f"Failed to parse date/time for last_triggered from event : {current_triggered_str}, wont affect functionality...")
-                    logger.warning(ex)
-                    # Ignore and let event be fired
-                    
-            # Now raise the bus event
-            event_data = {
-                "type": trigger_type,
-                "device_id": entity.registry_entry.device_id,
-                ATTR_ENTITY_ID: entity.registry_entry.entity_id
-            }    
-            
-            self._hass.bus.fire(event_type="dirigera_platform_event",event_data=event_data)
-            logger.debug(f"Event fired.. {event_data}")
+        msg_time = _parse_hub_time(msg.get("time"))
+        for trigger in data["triggers"]:
+            if trigger.get("type") != "controller":
+                logger.debug(f"Trigger type : {trigger.get('type')} not controller ignoring...")
+                continue
+
+            details = trigger.get("trigger", {})
+            if details.get("controllerType") != "shortcutController" or "deviceId" not in details:
+                logger.debug(f"trigger not from a shortcutController, ignoring : {trigger}")
+                continue
+
+            pressed_at = _parse_hub_time(trigger.get("triggeredAt") or data.get("lastTriggered"))
+            if pressed_at is None:
+                # No trigger time at all: still fire, debounced on the message time.
+                pressed_at = msg_time or datetime.datetime.now(datetime.timezone.utc)
+            elif msg_time is not None and msg_time - pressed_at > STALE_TRIGGER_DELTA:
+                logger.debug(f"trigger last fired at {pressed_at}, not part of this update, ignoring...")
+                continue
+
+            self._fire_controller_event(details["deviceId"], details.get("clickPattern"), pressed_at)
 
         # Apply scene action attributes to light entities
         # Some bulbs only send colorMode in deviceStateChanged after a scene,
@@ -575,77 +522,57 @@ class hub_event_listener(threading.Thread):
         Parse remotePressEvent messages from lightController remotes like STYRBAR and RODRET.
         These remotes send direct press events without needing scene configuration.
         """
-        global controller_trigger_last_time_map
-
-        if "data" not in msg:
-            logger.warning(f"discarding remotePressEvent: 'data' not found: {msg}")
+        data = msg.get("data")
+        if data is None or "id" not in data or "clickPattern" not in data:
+            logger.warning(f"discarding remotePressEvent without data/id/clickPattern: {msg}")
             return
 
-        data = msg["data"]
-        if "id" not in data or "clickPattern" not in data:
-            logger.warning(f"discarding remotePressEvent: 'id' or 'clickPattern' not found: {data}")
+        # The hub's own time, so both paths debounce on one clock.
+        pressed_at = _parse_hub_time(msg.get("time")) or datetime.datetime.now(datetime.timezone.utc)
+        self._fire_controller_event(data["id"], data["clickPattern"], pressed_at)
+
+    def _fire_controller_event(self, device_id, click_pattern, pressed_at):
+        """
+        Fire one dirigera_platform_event per physical press. Both the
+        remotePressEvent and the sceneUpdated path end here, so a press that
+        produces both, or a sceneUpdated that arrives twice, fires once.
+        pressed_at is a tz-aware hub timestamp.
+        """
+        trigger_type = CLICK_PATTERNS.get(click_pattern)
+        if trigger_type is None:
+            logger.debug(f"click_pattern : {click_pattern} not in list of types...ignoring")
             return
 
-        device_id = data["id"]
-        click_pattern = data["clickPattern"]
-
-        # Convert clickPattern to trigger_type
-        if click_pattern == "singlePress":
-            trigger_type = "single_click"
-        elif click_pattern == "longPress":
-            trigger_type = "long_press"
-        elif click_pattern == "doublePress":
-            trigger_type = "double_click"
-        else:
-            logger.debug(f"remotePressEvent: unknown clickPattern '{click_pattern}', ignoring...")
-            return
-
-        # Handle multi-button controllers (device_id like xxx_2 means button 2)
+        # Multi-button controllers: device_id xxx_2 means button 2 of xxx_1
         device_id_for_registry = device_id
-        button_idx = 0
-        pattern = '(([0-9]|[a-z]|-)*)_([0-9])+'
-        match = re.search(pattern, device_id)
+        match = re.search('(([0-9]|[a-z]|-)*)_([0-9])+', device_id)
         if match is not None:
             device_id_for_registry = f"{match.groups()[0]}_1"
-            button_idx = int(match.groups()[2])
-            logger.debug(f"remotePressEvent: Multi button controller, device_id effective: {device_id_for_registry} with button: {button_idx}")
+            trigger_type = f"button{int(match.groups()[2])}_{trigger_type}"
 
-        if button_idx != 0:
-            trigger_type = f"button{button_idx}_{trigger_type}"
-
-        # Look up entity in registry
         registry_value = hub_event_listener.get_registry_entry(self._hub_key, device_id_for_registry)
-
-        if registry_value is None:
-            logger.debug(f"remotePressEvent: Controller {device_id_for_registry} not found in registry, ignoring...")
-            return
-
         if registry_value.__class__.__name__ != "registry_entry":
-            logger.debug(f"remotePressEvent: id {device_id_for_registry} registry is not correct: {registry_value.__class__.__name__}...")
+            logger.debug(f"id : {device_id_for_registry} not a controller in the registry, ignoring...")
             return
-
         entity = registry_value.entity
 
-        # Debounce: prevent duplicate events within 1 second (IKEA bug workaround)
+        # Debounce: the hub reports one press more than once (IKEA bug
+        # workaround). Only a fired press is stored, so the map never moves
+        # back in time.
         unique_key = f"{entity.registry_entry.device_id}_{trigger_type}"
-        now = datetime.datetime.now(datetime.timezone.utc)
-        if unique_key in controller_trigger_last_time_map:
-            last_fired = controller_trigger_last_time_map[unique_key]
-            if (now - last_fired).total_seconds() < 1.0:
-                logger.debug(f"remotePressEvent: Debouncing duplicate event for {unique_key}")
-                return
+        last_fired = controller_trigger_last_time_map.get(unique_key)
+        if last_fired is not None and pressed_at - last_fired < DEBOUNCE_DELTA:
+            logger.debug(f"Debouncing duplicate event for {unique_key}")
+            return
+        controller_trigger_last_time_map[unique_key] = pressed_at
 
-        controller_trigger_last_time_map[unique_key] = now
-
-        # Fire Home Assistant event
         event_data = {
             "type": trigger_type,
             "device_id": entity.registry_entry.device_id,
             ATTR_ENTITY_ID: entity.registry_entry.entity_id
         }
-
         self._hass.bus.fire(event_type="dirigera_platform_event", event_data=event_data)
-        logger.debug(f"remotePressEvent fired: {event_data}")
+        logger.debug(f"Event fired.. {event_data}")
 
     def on_message(self, ws:Any, ws_msg:str):
         

@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from typing import Optional
 
@@ -448,7 +449,6 @@ class ikea_bulb_device_set(LightEntity):
         self._hub = hub
         self._controller = first_bulb
         self._device_set = device_set
-        self._patch_url = f"/devices/set/{device_set.id}?deviceType=light"    
 
         # Update cascade entity
         registry_entry_of_bulb = hub_event_listener.get_registry_entry(self._hub.websocket_base_url, first_bulb.unique_id)
@@ -528,69 +528,28 @@ class ikea_bulb_device_set(LightEntity):
             logger.error(ex)
             raise HomeAssistantError(ex, DOMAIN, "hub_exception")
 
-    def patch_command(self, key_val : dict):
-        data = [{"attributes" : key_val}]
-        try:
-            self._hub.patch(self._patch_url, data=data)
-        except Exception as ex:
-            logger.error("error encountered running update on : {}".format(self.name))
-            logger.error(ex)
-            raise HomeAssistantError(ex, DOMAIN, "hub_exception")
+    async def _each_member(self, method: str, **kwargs):
+        # The hub's /devices/set/{id} PATCH is not reliable: on guaifi's hub
+        # (#71) bulbs ended on the wrong level or temperature, or stayed off,
+        # whatever the body looked like, and one member ignored every set
+        # command while it worked on its own. So a set sends each member its
+        # own command, through the same per-light PATCH and per-hub queue as
+        # a single bulb. Every member is tried; a failure is raised after.
+        # Members are read at startup, as the set's first bulb always was.
+        lights = self._device_set.get_lights()
+        results = await asyncio.gather(
+            *(getattr(light, method)(**kwargs) for light in lights),
+            return_exceptions=True,
+        )
+        failed = [light.name for light, result in zip(lights, results) if isinstance(result, Exception)]
+        if failed:
+            logger.error(f"device_set {self.name}: {method} failed for {', '.join(failed)}")
+            raise HomeAssistantError(f"{method} failed for {', '.join(failed)}", DOMAIN, "hub_exception")
 
-    # As indicated the turn on / brightness / color etc can be set by a patch command
-    # the corresponding get doesnt work 
     async def async_turn_on(self, **kwargs):
-        logger.debug("light device_set turn_on...")
-        logger.debug(kwargs)
-
-        try:
-            # The set's state is its first bulb's, so the hub's echo for that
-            # bulb is the only way it reaches HA. Unlike ikea_bulb, nothing is
-            # written through here, so the echo must not be ignored: doing so
-            # left the set and its first bulb on their old brightness, white
-            # and colour while the hub had applied the new ones.
-            self._controller.reset_ignore_update()
-            await queue_for(self._hub).run(self.hass, self.patch_command, {"isOn": True})
-
-            if ATTR_BRIGHTNESS in kwargs:
-                # brightness requested
-                # HASS sends brightness in the range 0-255; the hub expects 1-100
-
-                logger.debug("Request to device_set set brightness...")
-                level = int(kwargs[ATTR_BRIGHTNESS])
-
-                scaled = brightness_to_hub_level(level)
-                logger.debug("Set brightness : {}".format(level))
-                logger.debug("Set scaled brightness : {}".format(scaled))
-                await queue_for(self._hub).run(self.hass, self.patch_command, {"lightLevel" : scaled})
-
-            if ATTR_COLOR_TEMP_KELVIN in kwargs and ColorMode.COLOR_TEMP in self._controller.supported_color_modes:
-                # color temp requested
-                # If request is white then brightness is passed
-                logger.debug("Request to device_set set color temp...")
-                ct = kwargs[ATTR_COLOR_TEMP_KELVIN]
-                logger.debug("Set CT : {}".format(ct))
-                await queue_for(self._hub).run(self.hass, self.patch_command, {"colorTemperature" : ct})
-
-            if ATTR_HS_COLOR in kwargs and ColorMode.HS in self._controller.supported_color_modes:
-                logger.debug("Request to set color HS device_set")
-                hs_tuple = kwargs[ATTR_HS_COLOR]
-                hue = hs_tuple[0]
-                saturation = hs_tuple[1] / 100  # Saturation is 0 - 1 at IKEA
-
-                await queue_for(self._hub).run(self.hass, self.patch_command, { "colorHue" : hue, "colorSaturation" : saturation})
-
-        except Exception as ex:
-            logger.error("error encountered turning on device_set : {}".format(self.name))
-            logger.error(ex)
-            raise HomeAssistantError(ex, DOMAIN, "hub_exception")
+        logger.debug(f"light device_set turn_on... {kwargs}")
+        await self._each_member("async_turn_on", **kwargs)
 
     async def async_turn_off(self, **kwargs):
-        self._controller.reset_ignore_update()
         logger.debug("light device_set turn_off...")
-        try:
-            await queue_for(self._hub).run(self.hass, self.patch_command, {"isOn": False})
-        except Exception as ex:
-            logger.error("error encountered turning off device_set : {}".format(self.name))
-            logger.error(ex)
-            raise HomeAssistantError(ex, DOMAIN, "hub_exception")
+        await self._each_member("async_turn_off", **kwargs)

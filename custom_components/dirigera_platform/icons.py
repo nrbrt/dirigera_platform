@@ -58,6 +58,7 @@ ikea_to_hass_mapping: dict[str, str] = {
     "scenes_clean_sparkles": "mdi:creation",
     "scenes_cutlery": "mdi:silverware-fork-knife",
     "scenes_disco_ball": "mdi:ceiling-light",
+    "scenes_flame": "mdi:fire",
     "scenes_game_pad": "mdi:gamepad",
     "scenes_gift_bag": "mdi:shopping",
     "scenes_gift_box": "mdi:gift",

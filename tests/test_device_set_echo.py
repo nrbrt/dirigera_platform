@@ -34,6 +34,7 @@ def _turn_on():
         "HomeAssistantError": Exception,
         "DOMAIN": "dirigera_platform",
         "logger": logging.getLogger(__name__),
+        "queue_for": lambda hub: _DirectQueue(),
     }
     exec(compile(ast.fix_missing_locations(ast.Module(body=[helper, fn], type_ignores=[])), LIGHT, "exec"), ns)
     return ns["async_turn_on"]
@@ -49,6 +50,11 @@ class _Controller:
         self._ignore_update = False
 
 
+class _DirectQueue:
+    async def run(self, hass, fn, *args):
+        return await hass.async_add_executor_job(fn, *args)
+
+
 class _Hass:
     async def async_add_executor_job(self, fn, *args):
         return fn(*args)
@@ -56,7 +62,7 @@ class _Hass:
 
 def test_turn_on_leaves_the_first_bulbs_echo_alone():
     sent = []
-    entity = SimpleNamespace(_controller=_Controller(), hass=_Hass(), patch_command=sent.append)
+    entity = SimpleNamespace(_controller=_Controller(), hass=_Hass(), _hub=None, patch_command=sent.append)
     for kwargs in ({"brightness": 178}, {"color_temp_kelvin": 2700}, {"hs_color": (30, 50)}):
         asyncio.run(_turn_on()(entity, **kwargs))
         assert entity._controller._ignore_update is False, kwargs

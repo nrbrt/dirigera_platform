@@ -299,6 +299,13 @@ class hub_event_listener(threading.Thread):
     # Fix: send a minimal application-level text frame well within that window.
     KEEPALIVE_INTERVAL = 15 * 60  # seconds — well below the hub's ~60 min timeout
 
+    # The Dirigera hub can deliver the same deviceRemoved event more than once
+    # (observed on a user's hub: two identical events ~20 ms apart). Each one
+    # used to start its own stale-device reconciliation, so one removal produced
+    # several /devices fetches and several warnings. A burst is coalesced into a
+    # single pass with a short trailing-edge debounce.
+    STALE_RECHECK_DEBOUNCE = 2.0  # seconds
+
     def __init__(self, hub : Hub, hass, discovery_coordinator=None, config_entry_id=None):
         super().__init__()
         # Scopes device-registry lookups to this hub's entry (#52).
@@ -321,6 +328,9 @@ class hub_event_listener(threading.Thread):
         # False until the first WebSocket open; used to tell an initial connect
         # (setup already fetched state) from a reconnect (must re-pull state).
         self._has_opened = False
+        # True while a coalesced stale-device recheck is already pending, so a
+        # burst of deviceRemoved events settles into one reconciliation.
+        self._stale_check_pending = False
 
     async def _update_device_area(self, device_id: str, room_name: str):
         """Update the device's area in Home Assistant's device registry if needed."""
@@ -620,8 +630,33 @@ class hub_event_listener(threading.Thread):
         self._hass.bus.fire(event_type="dirigera_platform_event", event_data=event_data)
         logger.debug(f"Event fired.. {event_data}")
 
+    def _schedule_stale_recheck(self):
+        """Coalesce a burst of deviceRemoved events into one reconciliation.
+
+        Runs on the event loop (scheduled via call_soon_threadsafe from the
+        WebSocket thread), so the pending flag needs no lock. The first event
+        of a burst arms a short timer; events arriving within the window are
+        dropped, and the single reconciliation fires on the trailing edge.
+        """
+        if self._request_to_stop or self._loop.is_closed():
+            return
+        if self._stale_check_pending:
+            return
+        self._stale_check_pending = True
+        self._loop.call_later(self.STALE_RECHECK_DEBOUNCE, self._run_coalesced_stale_check)
+
+    def _run_coalesced_stale_check(self):
+        self._stale_check_pending = False
+        if self._request_to_stop or self._loop.is_closed():
+            return
+        # Imported here: the tests load this module standalone.
+        from .stale_devices import async_remove_stale_devices
+        self._hass.async_create_task(
+            async_remove_stale_devices(self._hass, self._config_entry_id, self._hub)
+        )
+
     def on_message(self, ws:Any, ws_msg:str):
-        
+
         try:
             logger.debug(f"rcvd message : {ws_msg}")
             msg = json.loads(ws_msg)
@@ -656,19 +691,15 @@ class hub_event_listener(threading.Thread):
 
             # deviceRemoved: rerun the stale-device comparison against a fresh
             # /devices instead of removing this id blindly. A split device only
-            # goes once its last half is gone from the hub.
+            # goes once its last half is gone from the hub. The hub may deliver
+            # the same removal more than once; the recheck is coalesced so one
+            # removal is one reconciliation (see _schedule_stale_recheck).
             if msg['type'] == "deviceRemoved":
                 if "data" in msg and "id" in msg['data']:
                     logger.info(f"Device removed event received: {msg['data']['id']}")
                     if self._request_to_stop or self._loop.is_closed():
                         return
-                    # Imported here: the tests load this module standalone.
-                    from .stale_devices import async_remove_stale_devices
-                    self._loop.call_soon_threadsafe(
-                        lambda: self._hass.async_create_task(
-                            async_remove_stale_devices(self._hass, self._config_entry_id, self._hub)
-                        )
-                    )
+                    self._loop.call_soon_threadsafe(self._schedule_stale_recheck)
                 return
 
             if msg['type'] != "deviceStateChanged":

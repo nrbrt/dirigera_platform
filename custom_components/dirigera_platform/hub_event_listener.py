@@ -358,19 +358,20 @@ class hub_event_listener(threading.Thread):
         except Exception as ex:
             logger.error(f"Failed to update device area for {device_id}: {ex}")
 
-    async def _update_device_name(self, device_id: str, new_name: str, force: bool = False):
-        """Update the device's name in Home Assistant's device registry.
+    async def _update_device_name(self, device_id: str, new_name: str):
+        """Keep the device's own name in step with its name on the hub.
 
-        Args:
-            device_id: The device identifier
-            new_name: The new name from Dirigera hub
-            force: If True, update even if user has set a custom name in HA.
-                   Used at startup to sync names changed in the IKEA app.
+        Only the integration's name (`name`) is written. A name the user gave
+        the device in Home Assistant (`name_by_user`) is theirs: Home Assistant
+        shows it instead of `name`, and an integration must not change it.
+        Until 0.4.0 the startup sync cleared it, so a name given in HA came
+        back as the IKEA name after every restart (#72). A rename in the IKEA
+        app still shows up for every device the user did not rename in HA
+        (#19), and comes back for the others when they clear their own name.
         """
         try:
             device_reg = dr.async_get(self._hass)
 
-            # Find the device entry
             device_entry = get_device_by_identifier(
                 device_reg, ("dirigera_platform", device_id), self._config_entry_id
             )
@@ -378,24 +379,16 @@ class hub_event_listener(threading.Thread):
                 logger.debug(f"Device {device_id} not found in HA device registry for name update")
                 return
 
-            # Skip if user has set a custom name in HA (unless force=True)
-            if not force and device_entry.name_by_user is not None:
-                logger.debug(f"Device {device_id} has user-set name '{device_entry.name_by_user}', skipping")
-                return
-
-            # Only update if the name actually changed
-            current_name = device_entry.name_by_user or device_entry.name
-            if current_name == new_name:
+            if device_entry.name == new_name:
                 logger.debug(f"Device {device_id} name already matches '{new_name}'")
                 return
 
-            # Update the device's name
-            logger.info(f"Updating device {device_id} name: '{current_name}' -> '{new_name}' (name_by_user={device_entry.name_by_user})")
-            if device_entry.name_by_user is not None:
-                # Clear user-set name and update integration name
-                device_reg.async_update_device(device_entry.id, name=new_name, name_by_user=None)
-            else:
-                device_reg.async_update_device(device_entry.id, name=new_name)
+            logger.info(
+                f"Updating device {device_id} name: '{device_entry.name}' -> '{new_name}'"
+                + (f" (shown as the user's own name '{device_entry.name_by_user}')"
+                   if device_entry.name_by_user else "")
+            )
+            device_reg.async_update_device(device_entry.id, name=new_name)
         except Exception as ex:
             logger.error(f"Failed to update device name for {device_id}: {ex}")
 
@@ -425,7 +418,7 @@ class hub_event_listener(threading.Thread):
                     logger.debug(f"Name sync: skipping {device_id} - no name")
                     continue
                 logger.debug(f"Name sync: {identifier} -> device_name='{device_name}'")
-                await self._update_device_name(identifier, device_name, force=True)
+                await self._update_device_name(identifier, device_name)
                 synced_count += 1
             except Exception as ex:
                 logger.error(f"Failed to sync name for device {device_id}: {ex}")

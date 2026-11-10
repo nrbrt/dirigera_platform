@@ -252,3 +252,35 @@ def test_bulb_update_does_not_lose_an_event_that_arrives_during_the_fetch(setup)
     setup.loop.run_until_complete(scenario())
     assert bulb._json_data is fetched
     assert bulb.level == 90, "the fetched model replaced a newer live value"
+
+
+def test_bulb_update_does_not_hold_the_events_of_another_bulb(setup):
+    # The hold of a refresh is for the refreshing device only: on a slow hub
+    # the fetch can take seconds.
+    bulb = setup.add("b9", level=30)
+    other = setup.add("b10", level=30)
+    fetched = SimpleNamespace(id="b9", relation_id=None, room=None, is_reachable=True,
+                              attributes=Attrs(light_level=30))
+    gate, get = _gated_get(fetched)
+    bulb._hub = SimpleNamespace(websocket_base_url=HUB_KEY, get_light_by_id=get)
+    bulb.hass = setup.listener._hass
+    bulb.name = "b9"
+    bulb.set_state = lambda: None
+    async_update = _bulb_async_update()
+    seen = {}
+
+    async def scenario():
+        update = asyncio.ensure_future(async_update(bulb))
+        await asyncio.sleep(0.05)
+        setup.listener.on_message(None, _event("b10", lightLevel=90))
+        setup.listener.on_message(None, _event("b9", lightLevel=80))
+        await asyncio.sleep(0)
+        seen["other"], seen["own"] = other.level, bulb.level
+        gate.set()
+        await update
+        await asyncio.sleep(0)
+
+    setup.loop.run_until_complete(scenario())
+    assert seen == {"other": 90, "own": 30}
+    assert bulb._json_data is fetched
+    assert bulb.level == 80

@@ -324,11 +324,19 @@ class registry_entry:
         return str
 
 class _state_hold:
-    """State events of one hub, held while a snapshot of its state is fetched."""
+    """State events of one hub that wait for a fetch of device state.
+
+    hub counts the fetches that replace the state of every device (the
+    reconnect resync), entities those of one device, per entity. events are
+    the waiting (listener, message) pairs in arrival order."""
 
     def __init__(self):
-        self.holders = 0
+        self.hub = 0
+        self.entities = {}
         self.events = []
+
+    def covers(self, entity) -> bool:
+        return self.hub > 0 or entity in self.entities
 
 
 class hub_event_listener(threading.Thread):
@@ -355,23 +363,39 @@ class hub_event_listener(threading.Thread):
     # A fetched snapshot of device state is older than any event that arrives
     # while the fetch is on its way. Applying the event first and the snapshot
     # after it would put the older value back, so whoever fetches a snapshot
-    # that replaces state holds the hub's state events for that long; they are
-    # applied after it, in arrival order. {hub_key: _state_hold}. Event loop
-    # only, like everything that touches a model.
+    # that replaces state holds the state events it would overwrite for that
+    # long; they are applied after it, in arrival order.
+    #
+    # The scope of the hold is the scope of the fetch. A refresh of one device
+    # passes its entity and holds the events that end up at that entity (its
+    # own, and those of another part of a split device that are routed to
+    # it); every other device goes on as usual, however long the fetch takes.
+    # Without an entity the whole hub is held: the reconnect resync replaces
+    # the state of all devices. {hub_key: _state_hold}. Event loop only, like
+    # everything that touches a model.
     _state_holds = {}
 
     @contextlib.contextmanager
-    def hold_state_events(hub_key: str):
+    def hold_state_events(hub_key: str, entity=None):
         hold = hub_event_listener._state_holds.setdefault(hub_key, _state_hold())
-        hold.holders += 1
+        if entity is None:
+            hold.hub += 1
+        else:
+            hold.entities[entity] = hold.entities.get(entity, 0) + 1
         try:
             yield
         finally:
-            hold.holders -= 1
-            if hold.holders == 0:
-                held, hold.events = hold.events, []
-                for apply, msg in held:
-                    apply(msg)
+            if entity is None:
+                hold.hub -= 1
+            elif hold.entities[entity] > 1:
+                hold.entities[entity] -= 1
+            else:
+                del hold.entities[entity]
+            # Each waiting event goes back to its listener, which applies it
+            # or keeps it waiting for a hold that still covers it.
+            waiting, hold.events = hold.events, []
+            for listener, msg in waiting:
+                listener._receive(msg)
 
     def find_registry_entry(id: str) -> registry_entry:
         # Hub-agnostic lookup for callers without a hub reference (e.g. device
@@ -768,13 +792,56 @@ class hub_event_listener(threading.Thread):
             pass
 
     def _receive(self, msg):
-        """Event loop: apply a hub message, or hold it while a snapshot of the
-        hub's device state is on its way (see hold_state_events)."""
+        """Event loop: apply a hub message, or keep it waiting while a fetch of
+        the state it changes is on its way (see hold_state_events)."""
         hold = hub_event_listener._state_holds.get(self._hub_key)
-        if hold is not None and hold.holders and isinstance(msg, dict) and msg.get("type") == "deviceStateChanged":
-            hold.events.append((self._apply_message, msg))
+        if hold is not None and (hold.hub or hold.entities) and self._is_held(hold, msg):
+            hold.events.append((self, msg))
             return
         self._apply_message(msg)
+
+    def _is_held(self, hold, msg) -> bool:
+        if not isinstance(msg, dict) or msg.get("type") != "deviceStateChanged":
+            return False
+        if hold.hub:
+            return True
+        info = msg.get("data")
+        if not isinstance(info, dict) or "id" not in info:
+            return False
+        entry = self._own_registry().get(
+            self._registered_id(info["id"], info.get("deviceType", info.get("type"))))
+        return entry is not None and hold.covers(entry.entity)
+
+    def _registered_id(self, id, device_type):
+        """The id under which the entity for a hub device is registered: its
+        own, or for a part of a split device without an entity of its own the
+        part its events are routed to. None when there is none."""
+        registry = self._own_registry()
+        if id in registry:
+            return id
+
+        # For electricalSensor events (GRILLPLATS/TOFSMYGGA _2 -> _1)
+        if device_type == "electricalSensor" and id.endswith("_2"):
+            outlet_id = id[:-2] + "_1"
+            if outlet_id in registry:
+                logger.debug(f"Routing electricalSensor {id} events to outlet {outlet_id}")
+                return outlet_id
+
+        # For split-device environmentSensors (TIMMERFLOTTE: temp + humidity)
+        # Try _1 suffix pattern first, then search by relationId prefix
+        if device_type == "environmentSensor":
+            if id.endswith("_2"):
+                sibling_id = id[:-2] + "_1"
+                if sibling_id in registry:
+                    logger.debug(f"Routing environmentSensor {id} events to sibling {sibling_id}")
+                    return sibling_id
+            # Try finding any registered device sharing the same base ID (relationId)
+            base_id = id.rsplit("_", 1)[0] if "_" in id else id
+            for reg_id in registry:
+                if reg_id.startswith(base_id) and reg_id != id:
+                    logger.debug(f"Routing environmentSensor {id} events to related {reg_id}")
+                    return reg_id
+        return None
 
     def _apply_message(self, msg):
         """Event loop: the one place where a hub message changes anything."""
@@ -843,57 +910,29 @@ class hub_event_listener(threading.Thread):
 
             logger.debug(f"device type of message {device_type}")
 
-            if id not in self._own_registry():
-                # Split-device routing: try to find parent entity for unregistered devices
-                routed = False
-
-                # For electricalSensor events (GRILLPLATS/TOFSMYGGA _2 -> _1)
-                if device_type == "electricalSensor" and id.endswith("_2"):
-                    outlet_id = id[:-2] + "_1"
-                    if outlet_id in self._own_registry():
-                        logger.debug(f"Routing electricalSensor {id} events to outlet {outlet_id}")
-                        id = outlet_id
-                        routed = True
-
-                # For split-device environmentSensors (TIMMERFLOTTE: temp + humidity)
-                # Try _1 suffix pattern first, then search by relationId prefix
-                if not routed and device_type == "environmentSensor":
-                    # Try _1/_2 suffix pattern
-                    if id.endswith("_2"):
-                        sibling_id = id[:-2] + "_1"
-                        if sibling_id in self._own_registry():
-                            logger.debug(f"Routing environmentSensor {id} events to sibling {sibling_id}")
-                            id = sibling_id
-                            routed = True
-                    # Try finding any registered device sharing the same base ID (relationId)
-                    if not routed:
-                        base_id = id.rsplit("_", 1)[0] if "_" in id else id
-                        for reg_id in self._own_registry():
-                            if reg_id.startswith(base_id) and reg_id != id:
-                                logger.debug(f"Routing environmentSensor {id} events to related {reg_id}")
-                                id = reg_id
-                                routed = True
-                                break
-
-                if not routed:
-                    # During a reconnect resync we replay every device, so an
-                    # unknown id here is just a device with no entity — skip it
-                    # silently rather than firing discovery for it on every
-                    # reconnect. See issue #39.
-                    if self._resyncing:
-                        return
-                    # Unknown device - try to discover it
-                    if self._discovery_coordinator is not None:
-                        # Same split as at startup: remotes are recognised by
-                        # type, every other device by deviceType.
-                        discovery_type = "controller" if info.get("type") == "controller" else device_type
-                        logger.debug(f"Unknown device detected: {id} (type: {discovery_type}), triggering discovery")
-                        self._hass.async_create_task(
-                            self._discovery_coordinator.discover_device(id, discovery_type)
-                        )
-                    else:
-                        logger.info(f"discarding message as device for id: {id} not found for msg: {msg}")
+            # Its own entity, or for a part of a split device the entity its
+            # events are routed to.
+            id = self._registered_id(event_id, device_type)
+            if id is None:
+                id = event_id
+                # During a reconnect resync we replay every device, so an
+                # unknown id here is just a device with no entity — skip it
+                # silently rather than firing discovery for it on every
+                # reconnect. See issue #39.
+                if self._resyncing:
                     return
+                # Unknown device - try to discover it
+                if self._discovery_coordinator is not None:
+                    # Same split as at startup: remotes are recognised by
+                    # type, every other device by deviceType.
+                    discovery_type = "controller" if info.get("type") == "controller" else device_type
+                    logger.debug(f"Unknown device detected: {id} (type: {discovery_type}), triggering discovery")
+                    self._hass.async_create_task(
+                        self._discovery_coordinator.discover_device(id, discovery_type)
+                    )
+                else:
+                    logger.info(f"discarding message as device for id: {id} not found for msg: {msg}")
+                return
 
             registry_value = hub_event_listener.get_registry_entry(self._hub_key, id)
             entity = registry_value.entity

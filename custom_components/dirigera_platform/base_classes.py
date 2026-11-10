@@ -166,9 +166,10 @@ class ikea_base_device:
 
         The fetched model replaces the one hub events write to, and it is as
         old as the hub's answer: an event that arrives while the fetch is on
-        its way is newer. Those are held and applied to the new model once it
-        is in place (or to the old one when the fetch fails)."""
-        with hub_event_listener.hold_state_events(self._hub.websocket_base_url):
+        its way is newer. Those of this device are held and applied to the new
+        model once it is in place (or to the old one when the fetch fails);
+        the events of other devices are not kept waiting."""
+        with hub_event_listener.hold_state_events(self._hub.websocket_base_url, self):
             self._json_data = await self._hass.async_add_executor_job(self._get_by_id_fx, self._json_data.id)
 
     async def async_update(self):

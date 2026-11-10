@@ -20,9 +20,10 @@ from homeassistant.core import HomeAssistantError
 from homeassistant.helpers.entity import DeviceInfo
 
 from .const import DOMAIN, CONF_HIDE_DEVICE_SET_BULBS, PLATFORM, DISCOVERY_COORDINATOR
-from .hub_event_listener import hub_event_listener, registry_entry
+from .hub_event_listener import hub_event_listener, registry_entry, to_snake_case
 from .device_discovery import get_discovery_coordinator
 from .command_queue import queue_for
+from .pending_command import PendingCommand
 
 logger = logging.getLogger("custom_components.dirigera_platform")
 
@@ -162,8 +163,9 @@ def light_turn_on_patch(can_receive, kwargs, kelvin_range):
     saturation stay together in one item, as the library has always sent them.
     The order is isOn, then colour, then lightLevel (see below).
 
-    Returns (data, updates): the PATCH body and the attribute values to write
-    into the local model once the hub accepted it.
+    Returns (data, updates): the PATCH body and the model values it stands
+    for, after clamping and rounding. Those are the values the hub's echo is
+    compared with, and what the model assumes once the hub accepted the PATCH.
     """
     items = [{"isOn": True}]
     updates = {"is_on": True}
@@ -204,31 +206,19 @@ class ikea_bulb(LightEntity):
         logger.debug("ikea_bulb ctor...")
         self._hub = hub
         self._json_data = json_data
-        self._ignore_update = False 
+        # What this bulb was last told and the hub has not confirmed yet.
+        self._pending = PendingCommand()
 
         # Register the device for updates
         hub_event_listener.register(self._hub.websocket_base_url, self._json_data.id, registry_entry(self))
 
         self.set_state()
 
-    # When changing brightness a random update is sent by hub with brightness level before
-    # the actual value is sent. So this is a hack to ignore that random update
-    @property
-    def should_ignore_update(self):
-        return self._ignore_update
-    
-    def reset_ignore_update(self):
-        self._ignore_update = False 
-
     def set_state(self):
-        # Set Color capabilities
+        # The colour modes this bulb supports, from what it can receive.
         logger.debug("Set State of bulb..")
         color_modes = []
-        can_receive = self._json_data.capabilities.can_receive
-        #logger.debug("Got can_receive in state")
-        #logger.debug(can_receive)
-        self._color_mode = ColorMode.ONOFF
-        for cap in can_receive:
+        for cap in self._json_data.capabilities.can_receive:
             if cap == "lightLevel":
                 color_modes.append(ColorMode.BRIGHTNESS)
             elif cap == "colorTemperature":
@@ -246,33 +236,26 @@ class ikea_bulb(LightEntity):
             # as per above documentation
             color_modes.remove(ColorMode.BRIGHTNESS)
 
-        if len(color_modes) == 0:
-            logger.debug("Color modes array is zero, setting to UNKNOWN")
-            self._supported_color_modes = [ColorMode.ONOFF]
-        else:
-            self._supported_color_modes = color_modes
-            # Prefer the hub's own colorMode ("temperature" | "color") when the
-            # bulb reports it (attributes.color_mode, dirigera >= 1.6.0, issue
-            # #50). Without it, a dual-mode bulb in colour-temperature mode
-            # reports hs after a restart, and HA reports color_temp_kelvin as
-            # None until the next colour event. The HS-first rule below stays
-            # as the fallback for bulbs that do not report colorMode.
-            hub_mode = getattr(self._json_data.attributes, "color_mode", None)
-            if hub_mode == "temperature" and ColorMode.COLOR_TEMP in self._supported_color_modes:
-                self._color_mode = ColorMode.COLOR_TEMP
-            elif hub_mode == "color" and ColorMode.HS in self._supported_color_modes:
-                self._color_mode = ColorMode.HS
-            elif ColorMode.HS in self._supported_color_modes:
-                self._color_mode = ColorMode.HS
-            elif ColorMode.COLOR_TEMP in self._supported_color_modes:
-                self._color_mode = ColorMode.COLOR_TEMP
-            elif ColorMode.BRIGHTNESS in self._supported_color_modes:
-                self._color_mode = ColorMode.BRIGHTNESS
+        self._supported_color_modes = color_modes or [ColorMode.ONOFF]
 
-        #logger.debug("supported color mode set to:")
-        #logger.debug(self._supported_color_modes)
-        #logger.debug("color mode set to:")
-        #logger.debug(self._color_mode)
+    def hub_attributes(self, attributes: dict) -> dict:
+        """What of a hub event's attributes applies to this bulb.
+
+        The listener calls this before it writes the model, for every source
+        of hub state (events, scene actions, the reconnect snapshot)."""
+        if "colorMode" not in attributes:
+            # Not every bulb reports colorMode. The colour an event carries
+            # then says which kind was written last.
+            if "colorHue" in attributes or "colorSaturation" in attributes:
+                attributes = {**attributes, "colorMode": "color"}
+            elif "colorTemperature" in attributes:
+                attributes = {**attributes, "colorMode": "temperature"}
+        # A value that differs from what this bulb was just told is the hub's
+        # old or intermediate state (see pending_command.py).
+        return {
+            key: value for key, value in attributes.items()
+            if not self._pending.holds_back(to_snake_case(key), value)
+        }
 
     @property
     def should_poll(self) -> bool:
@@ -370,11 +353,23 @@ class ikea_bulb(LightEntity):
 
     @property
     def color_mode(self):
-        return self._color_mode
-    
-    @color_mode.setter
-    def color_mode(self, value):
-        self._color_mode = value 
+        # Derived from the model: the hub's own colorMode ("temperature" |
+        # "color", attributes.color_mode, dirigera >= 1.6.0, issue #50), which
+        # a command and an event without colorMode write there as well (see
+        # light_turn_on_patch and hub_attributes). A mode the bulb does not
+        # support is never reported: scenes and events carry colour keys for
+        # brightness-only devices too (e.g. the TRADFRI driver). Without a
+        # usable colorMode the HS-first rule decides.
+        supported = self._supported_color_modes
+        hub_mode = getattr(self._json_data.attributes, "color_mode", None)
+        if hub_mode == "temperature" and ColorMode.COLOR_TEMP in supported:
+            return ColorMode.COLOR_TEMP
+        if hub_mode == "color" and ColorMode.HS in supported:
+            return ColorMode.HS
+        for mode in (ColorMode.HS, ColorMode.COLOR_TEMP, ColorMode.BRIGHTNESS):
+            if mode in supported:
+                return mode
+        return ColorMode.ONOFF
 
     async def async_update(self):
         try:
@@ -391,12 +386,28 @@ class ikea_bulb(LightEntity):
             logger.error(ex)
             raise HomeAssistantError(ex, DOMAIN, "hub_exception")
         
+    async def _send(self, data, updates):
+        """PATCH this light through the hub's queue; `updates` are the model
+        values the PATCH stands for."""
+        # Recorded before the PATCH goes out: the hub's echo can be here
+        # before the PATCH call returns.
+        command = self._pending.begin(updates)
+        try:
+            await queue_for(self._hub).run(
+                self.hass, self._hub.patch, f"/devices/{self._json_data.id}", data
+            )
+        except BaseException:  # a cancelled call too
+            self._pending.failed(command)
+            raise
+        for key, value in self._pending.accepted(command).items():
+            setattr(self._json_data.attributes, key, value)
+        self.async_schedule_update_ha_state(False)
+
     async def async_turn_on(self, **kwargs):
         logger.debug("light turn_on...")
         logger.debug(kwargs)
 
         try:
-            self.reset_ignore_update()
             # One PATCH per light, through the hub's queue (#71). Three
             # separate PATCHes per light, sent in parallel for every light of
             # an area, often left bulbs on the wrong level or temperature.
@@ -406,20 +417,7 @@ class ikea_bulb(LightEntity):
                 (self.min_color_temp_kelvin, self.max_color_temp_kelvin),
             )
             logger.debug(f"PATCH {self._json_data.id}: {data}")
-            await queue_for(self._hub).run(
-                self.hass, self._hub.patch, f"/devices/{self._json_data.id}", data
-            )
-
-            for key, value in updates.items():
-                setattr(self._json_data.attributes, key, value)
-            if updates.get("color_mode") == "temperature":
-                self._color_mode = ColorMode.COLOR_TEMP
-            elif updates.get("color_mode") == "color":
-                self._color_mode = ColorMode.HS
-            if len(data) > 1:
-                # The hub may echo an old level first; see should_ignore_update.
-                self._ignore_update = True
-            self.async_schedule_update_ha_state(False)
+            await self._send(data, updates)
         except Exception as ex:
             logger.error("error encountered turning on : {}".format(self.name))
             logger.error(ex)
@@ -428,13 +426,7 @@ class ikea_bulb(LightEntity):
     async def async_turn_off(self, **kwargs):
         logger.debug("light turn_off...")
         try:
-            self.reset_ignore_update()
-            await queue_for(self._hub).run(
-                self.hass, self._hub.patch, f"/devices/{self._json_data.id}",
-                [{"attributes": {"isOn": False}}],
-            )
-            self._json_data.attributes.is_on = False
-            self.async_schedule_update_ha_state(False)
+            await self._send([{"attributes": {"isOn": False}}], {"is_on": False})
         except Exception as ex:
             logger.error("error encountered turning off : {}".format(self.name))
             logger.error(ex)

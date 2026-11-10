@@ -12,9 +12,11 @@ Two things are guarded here.
    its own Light, which replaced this integration's LightX subclass. Startup,
    async_update() and runtime discovery all build that Light.
 
-2. set_state(). It must follow color_mode when present, and keep the old
-   hs-first rule when it is None: not every bulb reports colorMode, so the
-   fallback is load-bearing, not dead code.
+2. The entity's color_mode. It is derived from the model: it must follow
+   attributes.color_mode when present, and keep the old hs-first rule when
+   it is None: not every bulb reports colorMode, so the fallback is
+   load-bearing, not dead code. set_state() only works out which modes the
+   bulb supports.
 
 As in test_matter_filtering.py, the code under test is lifted out of the
 source with ast, so the real bodies run without importing homeassistant.
@@ -58,7 +60,7 @@ def _exec(nodes, path, namespace):
     return namespace
 
 
-# --- set_state() ------------------------------------------------------------
+# --- set_state() and color_mode ---------------------------------------------
 
 class ColorMode(enum.Enum):
     ONOFF = "onoff"
@@ -67,11 +69,13 @@ class ColorMode(enum.Enum):
     HS = "hs"
 
 
-SET_STATE = _exec(
-    [_method(_parse(LIGHT), "ikea_bulb", "set_state")],
+_NS = _exec(
+    [_method(_parse(LIGHT), "ikea_bulb", "set_state"), _method(_parse(LIGHT), "ikea_bulb", "color_mode")],
     LIGHT,
     {"ColorMode": ColorMode, "logger": logging.getLogger(__name__)},
-)["set_state"]
+)
+SET_STATE = _NS["set_state"]
+COLOR_MODE = _NS["color_mode"].fget
 
 DUAL_MODE = ["isOn", "lightLevel", "colorTemperature", "colorHue", "colorSaturation"]
 CT_ONLY = ["isOn", "lightLevel", "colorTemperature"]
@@ -87,32 +91,47 @@ def _bulb(can_receive, **attributes):
     return bulb
 
 
+def _mode(can_receive, **attributes):
+    return COLOR_MODE(_bulb(can_receive, **attributes))
+
+
 def test_temperature_mode_is_reported_as_color_temp():
-    assert _bulb(DUAL_MODE, color_mode="temperature")._color_mode == ColorMode.COLOR_TEMP
+    assert _mode(DUAL_MODE, color_mode="temperature") == ColorMode.COLOR_TEMP
 
 
 def test_color_mode_is_reported_as_hs():
-    assert _bulb(DUAL_MODE, color_mode="color")._color_mode == ColorMode.HS
+    assert _mode(DUAL_MODE, color_mode="color") == ColorMode.HS
 
 
 def test_model_without_the_field_keeps_hs_first():
-    assert _bulb(DUAL_MODE)._color_mode == ColorMode.HS
+    assert _mode(DUAL_MODE) == ColorMode.HS
 
 
 def test_unknown_value_keeps_hs_first():
-    assert _bulb(DUAL_MODE, color_mode=None)._color_mode == ColorMode.HS
+    assert _mode(DUAL_MODE, color_mode=None) == ColorMode.HS
 
 
 def test_unrecognised_string_keeps_hs_first():
-    assert _bulb(DUAL_MODE, color_mode="xy")._color_mode == ColorMode.HS
+    assert _mode(DUAL_MODE, color_mode="xy") == ColorMode.HS
 
 
 def test_color_on_a_ct_only_bulb_is_ignored():
-    assert _bulb(CT_ONLY, color_mode="color")._color_mode == ColorMode.COLOR_TEMP
+    assert _mode(CT_ONLY, color_mode="color") == ColorMode.COLOR_TEMP
 
 
 def test_temperature_on_an_hs_only_bulb_is_ignored():
-    assert _bulb(HS_ONLY, color_mode="temperature")._color_mode == ColorMode.HS
+    assert _mode(HS_ONLY, color_mode="temperature") == ColorMode.HS
+
+
+def test_mode_follows_the_model_without_set_state_running_again():
+    bulb = _bulb(DUAL_MODE, color_mode="temperature")
+    bulb._json_data.attributes.color_mode = "color"
+    assert COLOR_MODE(bulb) == ColorMode.HS
+
+
+def test_brightness_only_and_on_off_bulbs():
+    assert _mode(["isOn", "lightLevel"], color_mode="color") == ColorMode.BRIGHTNESS
+    assert _mode(["isOn"]) == ColorMode.ONOFF
 
 
 def test_supported_modes_are_unchanged():

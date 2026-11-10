@@ -15,7 +15,6 @@ from dirigera import Hub
 from dirigera.devices.device import Room
 
 from homeassistant.const import ATTR_ENTITY_ID
-from homeassistant.components.light import ColorMode
 from homeassistant.helpers import device_registry as dr, entity_registry as er, area_registry as ar
 
 
@@ -199,10 +198,16 @@ def _apply_attributes(entity, attributes, own_device=True):
     routed to this entity (BILRESA _2, GRILLPLATS _2). Such a part adds what it
     measures (battery, energy), which is why it is routed here, but it does not
     erase or rename: its nulls and its customName (each part keeps its own name
-    on the hub) are skipped. Returns the hub keys that were written."""
+    on the hub) are skipped. Returns the hub keys that were written.
+
+    An entity with hub_attributes() says first what of the event applies to it
+    (a light leaves out the stale echo of its own command)."""
     model = getattr(getattr(entity, "_json_data", None), "attributes", None)
     if model is None:
         return set()
+    own_view = getattr(entity, "hub_attributes", None)
+    if own_view is not None:
+        attributes = own_view(attributes)
     # Read before anything is written (see #45).
     energy_reset_advanced = _energy_reset_advanced(entity, attributes)
     applied = set()
@@ -575,19 +580,6 @@ class hub_event_listener(threading.Thread):
             applied = _apply_attributes(entity, attributes)
             updated = bool(applied)
 
-            # Update color_mode based on scene attributes.
-            # Only apply a mode the entity actually supports — Dirigera scene
-            # actions can include colorHue/colorSaturation/colorTemperature for
-            # devices that don't support those modes (e.g. Tradfri Driver).
-            if updated and hasattr(entity, '_color_mode') and hasattr(entity, '_supported_color_modes'):
-                supported = entity._supported_color_modes or []
-                if ("colorHue" in attributes or "colorSaturation" in attributes) and ColorMode.HS in supported:
-                    entity._color_mode = ColorMode.HS
-                    logger.debug(f"Scene action: set color_mode to HS for {device_id}")
-                elif "colorTemperature" in attributes and ColorMode.COLOR_TEMP in supported:
-                    entity._color_mode = ColorMode.COLOR_TEMP
-                    logger.debug(f"Scene action: set color_mode to COLOR_TEMP for {device_id}")
-
             if updated:
                 try:
                     entity.async_schedule_update_ha_state()
@@ -886,52 +878,18 @@ class hub_event_listener(threading.Thread):
                     logger.error(f"Failed to set room on device: {id} for msg: {msg}")
                     logger.error(ex)
 
-            turn_on_off = False
             has_attributes = "attributes" in info and info["attributes"] is not None
             name_changed = False
             new_name = None
-            skip_state_push = False
 
             if has_attributes:
                 attributes = info["attributes"]
                 old_name = getattr(entity._json_data.attributes, "custom_name", None)
                 applied = _apply_attributes(entity, attributes, own_device=own_device)
-                # This is a hack need a better impl
-                turn_on_off = "isOn" in applied
                 # Track name changes for device registry update
                 if "customName" in applied and attributes["customName"] != old_name:
                     name_changed = True
                     new_name = attributes["customName"]
-
-                # Update color_mode for lights when color attributes change.
-                # Guard with _supported_color_modes so we never set a mode the
-                # entity cannot report (e.g. Tradfri Driver is brightness-only
-                # but the hub may still emit colorHue/colorSaturation keys).
-                if device_type == "light" and hasattr(entity, '_color_mode') and hasattr(entity, '_supported_color_modes'):
-                    supported = entity._supported_color_modes or []
-                    if ("colorHue" in attributes or "colorSaturation" in attributes) and ColorMode.HS in supported:
-                        entity._color_mode = ColorMode.HS
-                    elif "colorTemperature" in attributes and ColorMode.COLOR_TEMP in supported:
-                        entity._color_mode = ColorMode.COLOR_TEMP
-                    # The hub's explicit colorMode wins over the key heuristic
-                    # above: the echo of a CT patch can still carry stale
-                    # colorHue/colorSaturation values.
-                    hub_mode = attributes.get("colorMode")
-                    if hub_mode == "temperature" and ColorMode.COLOR_TEMP in supported:
-                        entity._color_mode = ColorMode.COLOR_TEMP
-                    elif hub_mode == "color" and ColorMode.HS in supported:
-                        entity._color_mode = ColorMode.HS
-
-                # Lights behave odd with hubs when setting attribute one event is generated which
-                # causes brightness or other to toggle so put in a hack to fix that
-                # if its is_on attribute then ignore this routine.
-                # Only the redundant state push is skipped — a customName change
-                # piggybacked on the echo event must still reach the device
-                # registry update below (a bare return used to drop it).
-                if device_type == "light" and entity.should_ignore_update and not turn_on_off:
-                    entity.reset_ignore_update()
-                    logger.debug("Ignoring calling update_ha_state as ignore_update is set")
-                    skip_state_push = True
 
                 # Update HA device registry name if customName changed
                 if name_changed and new_name is not None:
@@ -940,7 +898,7 @@ class hub_event_listener(threading.Thread):
                     )
 
             # Update HA state if attributes changed OR if reachability/room changed
-            if (has_attributes or reachability_changed or room_changed) and not skip_state_push:
+            if has_attributes or reachability_changed or room_changed:
                 entity.async_schedule_update_ha_state(False)
 
                 if registry_value.cascade_entity is not None:

@@ -28,9 +28,15 @@ COMPONENT = os.path.join(
 )
 LIGHT = os.path.join(COMPONENT, "light.py")
 
-_spec = importlib.util.spec_from_file_location("command_queue", os.path.join(COMPONENT, "command_queue.py"))
-command_queue = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(command_queue)
+def _module(name):
+    spec = importlib.util.spec_from_file_location(name, os.path.join(COMPONENT, name + ".py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+command_queue = _module("command_queue")
+pending_command = _module("pending_command")
 
 
 class ColorMode:
@@ -45,7 +51,7 @@ def _load():
              and n.name in ("brightness_to_hub_level", "light_turn_on_patch")]
     bulb = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "ikea_bulb")
     methods = [n for n in bulb.body if isinstance(n, ast.AsyncFunctionDef)
-               and n.name in ("async_turn_on", "async_turn_off")]
+               and n.name in ("_send", "async_turn_on", "async_turn_off")]
     ns = {
         "ATTR_BRIGHTNESS": "brightness",
         "ATTR_COLOR_TEMP_KELVIN": "color_temp_kelvin",
@@ -139,13 +145,13 @@ def _bulb(hub):
     attributes = SimpleNamespace(is_on=False, light_level=10, color_temperature=4000,
                                  color_hue=None, color_saturation=None, color_mode="temperature")
     bulb = SimpleNamespace(
-        _hub=hub, hass=_Hass(), _ignore_update=False, _color_mode=ColorMode.COLOR_TEMP,
+        _hub=hub, hass=_Hass(), _pending=pending_command.PendingCommand(), name="bulb-1",
         _json_data=SimpleNamespace(id="bulb-1", attributes=attributes,
                                    capabilities=SimpleNamespace(can_receive=DUAL)),
         min_color_temp_kelvin=RANGE[0], max_color_temp_kelvin=RANGE[1],
         async_schedule_update_ha_state=lambda force: None,
     )
-    bulb.reset_ignore_update = lambda: setattr(bulb, "_ignore_update", False)
+    bulb._send = lambda data, updates: NS["_send"](bulb, data, updates)
     return bulb
 
 
@@ -162,18 +168,18 @@ def test_turn_on_sends_one_patch_and_updates_the_model(monkeypatch):
     ])]
     a = bulb._json_data.attributes
     assert (a.is_on, a.light_level, a.color_hue, a.color_saturation, a.color_mode) == (True, 45, 120.0, 0.8, "color")
-    assert bulb._color_mode == ColorMode.HS
-    assert bulb._ignore_update is True
+    # What was sent is kept until the hub confirms it (test_light_echo.py).
+    assert bulb._pending.holds_back("light_level", 10) is True
 
 
-def test_plain_turn_on_does_not_ignore_the_echo(monkeypatch):
+def test_plain_turn_on(monkeypatch):
     monkeypatch.setattr(command_queue, "_queues", {})
     hub = _Hub()
     hub.websocket_base_url = "wss://test-2"
     bulb = _bulb(hub)
     asyncio.run(NS["async_turn_on"](bulb))
     assert hub.sent == [("/devices/bulb-1", [{"attributes": {"isOn": True}}])]
-    assert bulb._ignore_update is False
+    assert bulb._json_data.attributes.is_on is True
 
 
 def test_turn_off(monkeypatch):

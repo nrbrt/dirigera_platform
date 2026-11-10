@@ -47,8 +47,6 @@ class Attrs(BaseModel, validate_assignment=True):
 
 
 class _Light:
-    should_ignore_update = False
-
     def __init__(self, device_id, level=30):
         self._json_data = SimpleNamespace(
             id=device_id, relation_id=None, room=None, is_reachable=True,
@@ -56,9 +54,6 @@ class _Light:
         )
         self.unique_id = device_id
         self.writes = 0
-
-    def reset_ignore_update(self):
-        pass
 
     def async_schedule_update_ha_state(self, force_refresh=False):
         self.writes += 1

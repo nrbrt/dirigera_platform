@@ -182,7 +182,7 @@ def test_exception_reaches_its_caller_and_the_worker_goes_on():
     assert asyncio.run(main()) == "next"
 
 
-@pytest.mark.parametrize("error", [requests.ConnectTimeout, requests.ConnectionError, requests.ReadTimeout])
+@pytest.mark.parametrize("error", [requests.ConnectTimeout, requests.ConnectionError])
 def test_dead_hub_fails_the_rest_of_the_queue_at_once(error):
     timeout = 0.2
     hub = _Hub()
@@ -212,6 +212,31 @@ def test_dead_hub_fails_the_rest_of_the_queue_at_once(error):
     assert len(attempts) == 1, "every queued command waited for its own timeout"
     assert elapsed < 2 * timeout, f"took {elapsed:.2f} s, 10 timeouts would be {10 * timeout} s"
     assert after == "back"
+
+
+@pytest.mark.parametrize("error", [requests.ReadTimeout, requests.Timeout, requests.HTTPError])
+def test_one_slow_or_refused_answer_does_not_fail_the_queue(error):
+    # A ReadTimeout is a hub that was reached and took too long over this one
+    # request (and may have carried it out). The next command is for the hub
+    # to answer, not to be thrown away with the nine behind it.
+    hub = _Hub()
+
+    def slow():
+        raise error("no answer in time")
+
+    async def main():
+        writer = _writer(hub)
+        try:
+            return await asyncio.gather(
+                writer.run(slow), *(writer.run(hub.request, n) for n in range(3)),
+                return_exceptions=True)
+        finally:
+            writer.stop()
+
+    results = asyncio.run(main())
+    assert isinstance(results[0], error)
+    assert results[1:] == [0, 1, 2], "the queue behind one slow answer was failed"
+    assert hub.sent() == [0, 1, 2]
 
 
 # --- the worker lives as long as the config entry --------------------------------

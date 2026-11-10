@@ -15,10 +15,11 @@ start_hub_writer), not to whoever asked:
 * A caller that is cancelled (a script in mode: restart) stops waiting. A
   command that is already with the hub is finished, and the next one starts
   after it; a command that was still waiting is not sent.
-* When the hub does not answer (a connection error or timeout from requests),
-  the commands that were waiting behind it fail at once with HubUnreachable
-  instead of each running into its own 10 s timeout. A command that comes
-  after that is tried again.
+* When the hub cannot be reached (a connection error from requests, a connect
+  timeout included), the commands that were waiting behind it fail at once
+  with HubUnreachable instead of each running into its own 10 s timeout. A
+  command that comes after that is tried again. One request the hub was too
+  slow to answer (a read timeout) fails alone.
 * When the entry is unloaded the worker ends and everything that was waiting
   fails with HubWriterStopped.
 
@@ -31,9 +32,11 @@ import requests
 
 MIN_SPACING_S = 0.2
 
-# What the dirigera library lets through when the hub cannot be reached. An
-# HTTP error is not one of them: the hub answered.
-_UNREACHABLE = (requests.ConnectionError, requests.Timeout)
+# What the dirigera library lets through when no connection to the hub could
+# be made (ConnectTimeout is a ConnectionError). Not an HTTP error: the hub
+# answered. And not a ReadTimeout: the hub was reached and was slow with that
+# one request, which says nothing about the next.
+_UNREACHABLE = (requests.ConnectionError,)
 
 _writers = {}  # websocket address of the hub -> its writers, the newest last
 

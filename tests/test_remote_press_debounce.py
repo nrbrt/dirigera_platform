@@ -26,7 +26,7 @@ L = hel.hub_event_listener
 @pytest.fixture
 def listener():
     fired = []
-    bus = SimpleNamespace(fire=lambda event_type, event_data: fired.append(event_data["type"]))
+    bus = SimpleNamespace(async_fire=lambda event_type, event_data: fired.append(event_data["type"]))
     entity = SimpleNamespace(registry_entry=SimpleNamespace(device_id="dev1", entity_id="sensor.bilresa"))
     saved = L.device_registry
     L.device_registry = {"hk": {"abc_1": hel.registry_entry(entity)}}
@@ -34,6 +34,9 @@ def listener():
     hel.remotes_with_press_events.clear()
     me = object.__new__(L)
     me._hub_key = "hk"
+    me._request_to_stop = False
+    # The hand-off to the event loop, run inline.
+    me._loop = SimpleNamespace(call_soon_threadsafe=lambda f, *args: f(*args))
     me._hass = SimpleNamespace(bus=bus)
     me._apply_scene_actions = lambda msg: None
     yield me, fired
@@ -95,7 +98,7 @@ def two_remotes(listener):
     me, fired = listener
     other = SimpleNamespace(registry_entry=SimpleNamespace(device_id="dev2", entity_id="sensor.other"))
     L.device_registry["hk"]["xyz_1"] = hel.registry_entry(other)
-    bus = SimpleNamespace(fire=lambda event_type, event_data: fired.append(
+    bus = SimpleNamespace(async_fire=lambda event_type, event_data: fired.append(
         (event_data["device_id"], event_data["type"])))
     me._hass = SimpleNamespace(bus=bus)
     return me, fired

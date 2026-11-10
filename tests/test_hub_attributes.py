@@ -123,7 +123,7 @@ class _Entity:
         self.unique_id = device_id
         self.pushes = 0
 
-    def schedule_update_ha_state(self, force_refresh=False):
+    def async_schedule_update_ha_state(self, force_refresh=False):
         self.pushes += 1
 
 
@@ -133,7 +133,8 @@ def _listener(discovered=None):
     if discovered is not None:
         coordinator = SimpleNamespace(discover_device=lambda i, t: discovered.append((i, t)))
     listener = hub_event_listener(SimpleNamespace(websocket_base_url=HUB_KEY), SimpleNamespace(), coordinator)
-    listener._loop = SimpleNamespace(call_soon_threadsafe=lambda f: f(), is_closed=lambda: False)
+    # The hand-off to the event loop, run inline.
+    listener._loop = SimpleNamespace(call_soon_threadsafe=lambda f, *args: f(*args))
     listener._hass = SimpleNamespace(async_create_task=lambda result: result)
     listener._update_device_name = lambda device_id, name: None
     listener._update_device_area = lambda device_id, room: None

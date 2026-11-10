@@ -379,8 +379,13 @@ class ikea_bulb(LightEntity):
     async def async_update(self):
         try:
             logger.debug("async update called on bulb..")
-            self._json_data = await self.hass.async_add_executor_job(self._hub.get_light_by_id, self._json_data.id)
-            self.set_state()
+            # The fetched model replaces the one hub events write to, and it is
+            # as old as the hub's answer: an event that arrives while the fetch
+            # is on its way is newer. Those are held and applied to the new
+            # model after it is in place.
+            with hub_event_listener.hold_state_events(self._hub.websocket_base_url):
+                self._json_data = await self.hass.async_add_executor_job(self._hub.get_light_by_id, self._json_data.id)
+                self.set_state()
         except Exception as ex:
             logger.error("error encountered running update on : {}".format(self.name))
             logger.error(ex)

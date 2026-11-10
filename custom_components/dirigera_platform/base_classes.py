@@ -213,31 +213,20 @@ class ikea_base_device:
                 # the same window — one attempt per device per ttl.
                 self._updated_at = time.monotonic()
 
-    # To ensure state update of hass is cascaded
+    # To ensure state update of hass is cascaded. Event loop only: hub events
+    # are applied on the loop (hub_event_listener), as are commands.
     def async_schedule_update_ha_state(self, force_refresh:bool = False) -> None:
         for listener in self._listeners:
             # A listener registered via add_listener but never added to HA
-            # (async_add_entities not called for it) has hass=None; HA's
-            # schedule_update_ha_state then dereferences self.hass.loop and
-            # raises AttributeError, surfacing as a flood of "error processing
-            # hub event" warnings (#41). Skipping it is behaviour-neutral: an
-            # entity not registered with HA cannot receive a state push anyway.
+            # (async_add_entities not called for it) has hass=None and cannot
+            # write state; trying raised on every hub event (#41). Skipping it
+            # is behaviour-neutral: an entity not registered with HA cannot
+            # receive a state push anyway.
             if listener.hass is None:
                 continue
             if self._push_throttled(listener, force_refresh):
                 continue
-            listener.schedule_update_ha_state(force_refresh)
-
-    # To ensure state update of hass is cascaded
-    def schedule_update_ha_state(self, force_refresh:bool = False) -> None:
-        for listener in self._listeners:
-            # See async_schedule_update_ha_state: a listener with hass=None
-            # would raise AttributeError in HA's schedule_update_ha_state (#41).
-            if listener.hass is None:
-                continue
-            if self._push_throttled(listener, force_refresh):
-                continue
-            listener.schedule_update_ha_state(force_refresh)
+            listener.async_schedule_update_ha_state(force_refresh)
 
     @staticmethod
     def _push_throttled(listener, force_refresh: bool) -> bool:
@@ -278,25 +267,15 @@ class ikea_base_device:
     def _arm_trailing_flush(listener, delay: float) -> None:
         """Schedule a one-shot state write for when the throttle window ends.
 
-        Called from the WebSocket thread (hub_event_listener.on_message), so
-        the timer must be created on the event loop via call_soon_threadsafe.
         At most one flush is pending per listener; the flush itself re-opens
         the throttle window, so the write rate stays capped at one write per
         configured interval."""
         if getattr(listener, "_ha_flush_pending", False):
             return
         listener._ha_flush_pending = True
-
-        def _arm() -> None:
-            listener.hass.loop.call_later(
-                max(delay, 0.5), ikea_base_device._run_trailing_flush, listener
-            )
-
-        try:
-            listener.hass.loop.call_soon_threadsafe(_arm)
-        except RuntimeError:
-            # Event loop already closed (shutdown), nothing left to flush.
-            listener._ha_flush_pending = False
+        listener.hass.loop.call_later(
+            max(delay, 0.5), ikea_base_device._run_trailing_flush, listener
+        )
 
     @staticmethod
     def _run_trailing_flush(listener) -> None:
@@ -308,7 +287,7 @@ class ikea_base_device:
             return
         listener._ha_last_push_at = time.monotonic()
         try:
-            listener.schedule_update_ha_state(False)
+            listener.async_schedule_update_ha_state(False)
         except Exception:
             # Entity may have been removed between arming and firing.
             logger.debug(
@@ -797,15 +776,15 @@ class ikea_controller_device(ikea_base_device, SensorEntity):
         super().__init__(hass , hub, json_data, hub.get_controller_by_id)
         self.skip_update = True
 
-    def schedule_update_ha_state(self, force_refresh: bool = False) -> None:
+    def async_schedule_update_ha_state(self, force_refresh: bool = False) -> None:
         # This device IS its own HA entity (no separate sensor wrapper), so a
-        # hub push event must reach Entity.schedule_update_ha_state directly:
-        # the base-device fan-out only forwards to _listeners, which is empty
-        # for controllers — battery events were silently dropped and the
-        # state only converged via polling.
+        # hub push event must reach Entity.async_schedule_update_ha_state
+        # directly: the base-device fan-out only forwards to _listeners, which
+        # is empty for controllers — battery events were silently dropped and
+        # the state only converged via polling.
         if self.hass is None:
             return
-        Entity.schedule_update_ha_state(self, force_refresh)
+        Entity.async_schedule_update_ha_state(self, force_refresh)
 
     @property
     def entity_category(self):

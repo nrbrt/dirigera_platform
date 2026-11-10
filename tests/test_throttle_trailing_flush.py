@@ -109,12 +109,7 @@ class FakeLoop:
     """Records what the code schedules instead of running a real event loop."""
 
     def __init__(self):
-        self.threadsafe_calls = []
         self.later_calls = []
-
-    def call_soon_threadsafe(self, fn, *args):
-        self.threadsafe_calls.append(fn)
-        fn(*args)  # run inline so the test can observe call_later
 
     def call_later(self, delay, fn, *args):
         self.later_calls.append((delay, fn, args))
@@ -135,7 +130,7 @@ class FakeListener:
         self.unique_id = "fake_outlet_power"
         self.writes = 0
 
-    def schedule_update_ha_state(self, force_refresh=False):
+    def async_schedule_update_ha_state(self, force_refresh=False):
         self.writes += 1
 
 

@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import threading
 import logging 
 import time 
@@ -257,6 +258,14 @@ class registry_entry:
             str = str + f"{self._cascade_entity}"
         return str
 
+class _state_hold:
+    """State events of one hub, held while a snapshot of its state is fetched."""
+
+    def __init__(self):
+        self.holders = 0
+        self.events = []
+
+
 class hub_event_listener(threading.Thread):
     # Per-hub device registries: {hub_key: {device_id: registry_entry}}.
     # hub_key is the hub's websocket_base_url, which a hub's entities and its
@@ -276,6 +285,28 @@ class hub_event_listener(threading.Thread):
 
     def unregister_hub(hub_key: str):
         hub_event_listener.device_registry.pop(hub_key, None)
+        hub_event_listener._state_holds.pop(hub_key, None)
+
+    # A fetched snapshot of device state is older than any event that arrives
+    # while the fetch is on its way. Applying the event first and the snapshot
+    # after it would put the older value back, so whoever fetches a snapshot
+    # that replaces state holds the hub's state events for that long; they are
+    # applied after it, in arrival order. {hub_key: _state_hold}. Event loop
+    # only, like everything that touches a model.
+    _state_holds = {}
+
+    @contextlib.contextmanager
+    def hold_state_events(hub_key: str):
+        hold = hub_event_listener._state_holds.setdefault(hub_key, _state_hold())
+        hold.holders += 1
+        try:
+            yield
+        finally:
+            hold.holders -= 1
+            if hold.holders == 0:
+                held, hold.events = hold.events, []
+                for apply, msg in held:
+                    apply(msg)
 
     def find_registry_entry(id: str) -> registry_entry:
         # Hub-agnostic lookup for callers without a hub reference (e.g. device
@@ -325,6 +356,9 @@ class hub_event_listener(threading.Thread):
         # True while a post-reconnect state resync is replaying /devices, so the
         # event path skips discovery for unknown devices (issue #39).
         self._resyncing = False
+        # One resync at a time: a second reconnect waits for the first resync
+        # and then fetches again.
+        self._resync_lock = asyncio.Lock()
         # False until the first WebSocket open; used to tell an initial connect
         # (setup already fetched state) from a reconnect (must re-pull state).
         self._has_opened = False
@@ -556,10 +590,10 @@ class hub_event_listener(threading.Thread):
 
             if updated:
                 try:
-                    entity.schedule_update_ha_state()
-                    logger.debug(f"Scene action: scheduled HA state update for {device_id}")
+                    entity.async_schedule_update_ha_state()
+                    logger.debug(f"Scene action: HA state updated for {device_id}")
                 except Exception as ex:
-                    logger.warning(f"Scene action: failed to schedule update for {device_id}: {ex}")
+                    logger.warning(f"Scene action: failed to update state for {device_id}: {ex}")
 
     def parse_remote_press_event(self, msg):
         """
@@ -627,19 +661,16 @@ class hub_event_listener(threading.Thread):
             "device_id": entity.registry_entry.device_id,
             ATTR_ENTITY_ID: entity.registry_entry.entity_id
         }
-        self._hass.bus.fire(event_type="dirigera_platform_event", event_data=event_data)
+        self._hass.bus.async_fire(event_type="dirigera_platform_event", event_data=event_data)
         logger.debug(f"Event fired.. {event_data}")
 
     def _schedule_stale_recheck(self):
         """Coalesce a burst of deviceRemoved events into one reconciliation.
 
-        Runs on the event loop (scheduled via call_soon_threadsafe from the
-        WebSocket thread), so the pending flag needs no lock. The first event
-        of a burst arms a short timer; events arriving within the window are
-        dropped, and the single reconciliation fires on the trailing edge.
+        The first event of a burst arms a short timer; events arriving within
+        the window are dropped, and the single reconciliation fires on the
+        trailing edge.
         """
-        if self._request_to_stop or self._loop.is_closed():
-            return
         if self._stale_check_pending:
             return
         self._stale_check_pending = True
@@ -647,7 +678,8 @@ class hub_event_listener(threading.Thread):
 
     def _run_coalesced_stale_check(self):
         self._stale_check_pending = False
-        if self._request_to_stop or self._loop.is_closed():
+        # The timer can outlive the listener.
+        if self._request_to_stop:
             return
         # Imported here: the tests load this module standalone.
         from .stale_devices import async_remove_stale_devices
@@ -656,11 +688,42 @@ class hub_event_listener(threading.Thread):
         )
 
     def on_message(self, ws:Any, ws_msg:str):
+        """WebSocket thread: parse the message and hand it to the event loop.
 
+        Nothing else happens on this thread. The entity models, the registry
+        and Home Assistant itself belong to the event loop; this thread used
+        to write the same models the loop reads and writes.
+        """
+        logger.debug(f"rcvd message : {ws_msg}")
         try:
-            logger.debug(f"rcvd message : {ws_msg}")
             msg = json.loads(ws_msg)
-            if "type" not in msg:
+        except ValueError:
+            logger.warning(f"discarding hub message that is not JSON: {ws_msg}")
+            return
+        try:
+            self._loop.call_soon_threadsafe(self._receive, msg)
+        except RuntimeError:
+            # The event loop is closed: Home Assistant is shutting down and
+            # nobody is left to tell (#42).
+            pass
+
+    def _receive(self, msg):
+        """Event loop: apply a hub message, or hold it while a snapshot of the
+        hub's device state is on its way (see hold_state_events)."""
+        hold = hub_event_listener._state_holds.get(self._hub_key)
+        if hold is not None and hold.holders and isinstance(msg, dict) and msg.get("type") == "deviceStateChanged":
+            hold.events.append((self._apply_message, msg))
+            return
+        self._apply_message(msg)
+
+    def _apply_message(self, msg):
+        """Event loop: the one place where a hub message changes anything."""
+        # A message handed over before stop() runs after it; the listener's
+        # entities are being torn down by then.
+        if self._request_to_stop:
+            return
+        try:
+            if not isinstance(msg, dict) or "type" not in msg:
                 logger.debug(f"'type' not found in incoming message, discarding : {msg}")
                 return 
             
@@ -679,11 +742,8 @@ class hub_event_listener(threading.Thread):
                     device_type = msg['data'].get('deviceType', msg['data'].get('type'))
                     if device_type and self._discovery_coordinator is not None:
                         logger.info(f"Device added event received: {device_id} (type: {device_type})")
-                        # Schedule discovery on the main event loop
-                        self._loop.call_soon_threadsafe(
-                            lambda did=device_id, dt=device_type: self._hass.async_create_task(
-                                self._discovery_coordinator.discover_device(did, dt)
-                            )
+                        self._hass.async_create_task(
+                            self._discovery_coordinator.discover_device(device_id, device_type)
                         )
                     else:
                         logger.debug(f"deviceAdded event without discovery coordinator or type: {msg}")
@@ -697,9 +757,7 @@ class hub_event_listener(threading.Thread):
             if msg['type'] == "deviceRemoved":
                 if "data" in msg and "id" in msg['data']:
                     logger.info(f"Device removed event received: {msg['data']['id']}")
-                    if self._request_to_stop or self._loop.is_closed():
-                        return
-                    self._loop.call_soon_threadsafe(self._schedule_stale_recheck)
+                    self._schedule_stale_recheck()
                 return
 
             if msg['type'] != "deviceStateChanged":
@@ -770,10 +828,8 @@ class hub_event_listener(threading.Thread):
                         # type, every other device by deviceType.
                         discovery_type = "controller" if info.get("type") == "controller" else device_type
                         logger.debug(f"Unknown device detected: {id} (type: {discovery_type}), triggering discovery")
-                        self._loop.call_soon_threadsafe(
-                            lambda: self._hass.async_create_task(
-                                self._discovery_coordinator.discover_device(id, discovery_type)
-                            )
+                        self._hass.async_create_task(
+                            self._discovery_coordinator.discover_device(id, discovery_type)
                         )
                     else:
                         logger.info(f"discarding message as device for id: {id} not found for msg: {msg}")
@@ -815,27 +871,17 @@ class hub_event_listener(threading.Thread):
                         # Always ensure HA device registry area matches (even if _json_data room didn't change)
                         # This handles the case where HA restarts and the room is already set in _json_data
                         # but not yet in the HA device registry
-                        try:
-                            self._loop.call_soon_threadsafe(
-                                lambda room=new_room.name, device_id=(entity._json_data.relation_id or id): self._hass.async_create_task(
-                                    self._update_device_area(device_id, room)
-                                )
-                            )
-                        except Exception as ex:
-                            logger.error(f"Failed to schedule device area update for {id}: {ex}")
+                        self._hass.async_create_task(
+                            self._update_device_area(entity._json_data.relation_id or id, new_room.name)
+                        )
                     elif entity._json_data.room is not None:
                         # Room was removed
                         logger.debug(f"Removing room from {id}")
                         entity._json_data.room = None
                         room_changed = True
-                        try:
-                            self._loop.call_soon_threadsafe(
-                                lambda device_id=(entity._json_data.relation_id or id): self._hass.async_create_task(
-                                    self._update_device_area(device_id, "")
-                                )
-                            )
-                        except Exception as ex:
-                            logger.error(f"Failed to schedule device area removal for {id}: {ex}")
+                        self._hass.async_create_task(
+                            self._update_device_area(entity._json_data.relation_id or id, "")
+                        )
                 except Exception as ex:
                     logger.error(f"Failed to set room on device: {id} for msg: {msg}")
                     logger.error(ex)
@@ -889,36 +935,23 @@ class hub_event_listener(threading.Thread):
 
                 # Update HA device registry name if customName changed
                 if name_changed and new_name is not None:
-                    try:
-                        self._loop.call_soon_threadsafe(
-                            lambda name=new_name, device_id=(entity._json_data.relation_id or id): self._hass.async_create_task(
-                                self._update_device_name(device_id, name)
-                            )
-                        )
-                    except Exception as ex:
-                        logger.error(f"Failed to schedule device name update for {id}: {ex}")
+                    self._hass.async_create_task(
+                        self._update_device_name(entity._json_data.relation_id or id, new_name)
+                    )
 
             # Update HA state if attributes changed OR if reachability/room changed
             if (has_attributes or reachability_changed or room_changed) and not skip_state_push:
-                # During HA shutdown this WebSocket thread can still receive events
-                # after the event loop is closed; scheduling a state update then
-                # raises "RuntimeError: Event loop is closed" and spams a warning
-                # per event (#42). The keepalive path already guards on
-                # _request_to_stop, so mirror that here and also bail if the loop
-                # has already been closed.
-                if self._request_to_stop or self._loop.is_closed():
-                    return
-                entity.schedule_update_ha_state(False)
+                entity.async_schedule_update_ha_state(False)
 
                 if registry_value.cascade_entity is not None:
                     # Cascade the update
                     logger.debug(f"Cascading to cascade entity : {registry_value.cascade_entity.unique_id}")
-                    registry_value.cascade_entity.schedule_update_ha_state(False)
+                    registry_value.cascade_entity.async_schedule_update_ha_state(False)
 
         except Exception:
             # Visible at default log level: a swallowed DEBUG here used to hide
             # every event-processing bug behind silently-stale entities.
-            logger.warning(f"error processing hub event: {ws_msg}", exc_info=True)
+            logger.warning(f"error processing hub event: {msg}", exc_info=True)
 
     def _send_keepalive(self):
         """Send an application-level text frame to reset the hub's inactivity timer.
@@ -984,31 +1017,30 @@ class hub_event_listener(threading.Thread):
         self._has_opened = True
 
     async def _resync_all_states(self):
-        """Re-pull current state for all devices after a reconnect and replay
-        it through the normal event path, so changes missed during the
-        disconnect gap are caught up. One /devices fetch (no per-device
-        hammering); discovery is suppressed during the replay. See issue #39."""
-        try:
-            devices = await self._hass.async_add_executor_job(self._hub.get, "/devices")
-        except Exception as ex:
-            logger.warning(f"State resync failed to fetch /devices: {ex}")
-            return
-        if not devices:
-            return
-        self._resyncing = True
-        try:
-            for device in devices:
+        """Re-pull current state for all devices after a reconnect and apply
+        it like events, so changes missed during the disconnect gap are caught
+        up. One /devices fetch (no per-device hammering); discovery is
+        suppressed during the replay. See issue #39.
+
+        The snapshot is as old as the moment the hub built it. State events
+        that arrive from then on are newer, so they are held until the
+        snapshot has been applied (see hold_state_events)."""
+        async with self._resync_lock:
+            with hub_event_listener.hold_state_events(self._hub_key):
                 try:
-                    self.on_message(
-                        None, json.dumps({"type": "deviceStateChanged", "data": device})
-                    )
+                    devices = await self._hass.async_add_executor_job(self._hub.get, "/devices")
                 except Exception as ex:
-                    logger.debug(
-                        f"resync: failed to apply state for {device.get('id')}: {ex}"
-                    )
-            logger.info(f"State resync applied for {len(devices)} devices after reconnect")
-        finally:
-            self._resyncing = False
+                    logger.warning(f"State resync failed to fetch /devices: {ex}")
+                    return
+                if not devices:
+                    return
+                self._resyncing = True
+                try:
+                    for device in devices:
+                        self._apply_message({"type": "deviceStateChanged", "data": device})
+                    logger.info(f"State resync applied for {len(devices)} devices after reconnect")
+                finally:
+                    self._resyncing = False
 
     def create_listener(self):
         try:

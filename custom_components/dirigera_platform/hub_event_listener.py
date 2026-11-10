@@ -735,8 +735,16 @@ class hub_event_listener(threading.Thread):
             return
         # Imported here: the tests load this module standalone.
         from .stale_devices import async_remove_stale_devices
-        self._hass.async_create_task(
-            async_remove_stale_devices(self._hass, self._config_entry_id, self._hub)
+        # A background task of the config entry: unloading the entry cancels
+        # it, so a /devices fetch that is still on its way never comes back to
+        # compare against an entry that is gone.
+        entry = self._hass.config_entries.async_get_entry(self._config_entry_id)
+        if entry is None:
+            return
+        entry.async_create_background_task(
+            self._hass,
+            async_remove_stale_devices(self._hass, self._config_entry_id, self._hub),
+            "dirigera_platform stale device recheck",
         )
 
     def on_message(self, ws:Any, ws_msg:str):

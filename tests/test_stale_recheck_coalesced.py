@@ -55,8 +55,8 @@ _PATH = os.path.join(
 # Load the module as a submodule of a fake package, so its
 # `from .stale_devices import async_remove_stale_devices` resolves to a fake
 # and the real _run_coalesced_stale_check runs (clearing the pending flag).
-# Calling that coroutine function is what a reconciliation does;
-# async_create_task below counts those.
+# Calling that coroutine function is what a reconciliation does; the entry
+# below counts the background tasks made for it.
 _PKG = "dpkg_coalesce"
 _pkg = types.ModuleType(_PKG)
 _pkg.__path__ = []
@@ -80,19 +80,44 @@ HUB_KEY = "wss://hub.test:8443/v1"
 REMOVED = '{"type":"deviceRemoved","data":{"id":"d688ed69_1"}}'
 
 
-def _listener(debounce=0.05):
-    asyncio.set_event_loop(asyncio.new_event_loop())
-    calls = {"n": 0}
+class _Entry:
+    """A config entry as far as background tasks go: it owns them, and unload
+    cancels them (ConfigEntry.async_create_background_task)."""
 
-    def _async_create_task(coro):
-        calls["n"] += 1
-        coro.close()  # don't actually run it; we only count reconciliations
+    def __init__(self, run_tasks=False):
+        self.run_tasks = run_tasks
+        self.created = 0
+        self.tasks = []
 
-    hass = SimpleNamespace(async_create_task=_async_create_task)
+    def async_create_background_task(self, hass, target, name):
+        self.created += 1
+        if not self.run_tasks:
+            target.close()  # only count reconciliations
+            return None
+        task = asyncio.get_event_loop().create_task(target, name=name)
+        self.tasks.append(task)
+        return task
+
+    def unload(self):
+        for task in self.tasks:
+            task.cancel()
+
+
+def _listener(debounce=0.05, run_tasks=False):
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    entry = _Entry(run_tasks)
+    hass = SimpleNamespace(
+        config_entries=SimpleNamespace(
+            async_get_entry=lambda entry_id: entry if entry_id == "e1" else None),
+        # Home Assistant's own task: lives until Home Assistant stops, whatever
+        # happens to the entry.
+        async_create_task=lambda target: loop.create_task(target),
+    )
     listener = hub_event_listener(SimpleNamespace(websocket_base_url=HUB_KEY), hass, None)
     listener._config_entry_id = "e1"
     listener.STALE_RECHECK_DEBOUNCE = debounce
-    return listener, calls
+    return listener, entry
 
 
 def _drain(loop, seconds):
@@ -100,34 +125,69 @@ def _drain(loop, seconds):
 
 
 def test_burst_of_device_removed_events_runs_one_recheck():
-    listener, calls = _listener(debounce=0.05)
+    listener, entry = _listener(debounce=0.05)
     for _ in range(3):  # the hub double- or triple-delivers the same removal
         listener.on_message(None, REMOVED)
     _drain(listener._loop, 0.2)
-    assert calls["n"] == 1
+    assert entry.created == 1
 
 
 def test_single_device_removed_still_runs_one_recheck():
-    listener, calls = _listener(debounce=0.05)
+    listener, entry = _listener(debounce=0.05)
     listener.on_message(None, REMOVED)
     _drain(listener._loop, 0.2)
-    assert calls["n"] == 1
+    assert entry.created == 1
 
 
 def test_a_later_removal_runs_its_own_recheck():
     # Coalescing is time-boxed, not permanent: a genuine removal after the
     # window still reconciles.
-    listener, calls = _listener(debounce=0.05)
+    listener, entry = _listener(debounce=0.05)
     listener.on_message(None, REMOVED)
     _drain(listener._loop, 0.2)
     listener.on_message(None, REMOVED)
     _drain(listener._loop, 0.2)
-    assert calls["n"] == 2
+    assert entry.created == 2
 
 
 def test_stop_requested_skips_the_recheck():
-    listener, calls = _listener(debounce=0.05)
+    listener, entry = _listener(debounce=0.05)
     listener._request_to_stop = True
     listener.on_message(None, REMOVED)
     _drain(listener._loop, 0.2)
-    assert calls["n"] == 0
+    assert entry.created == 0
+
+
+def test_recheck_is_a_background_task_of_the_entry_so_unload_cancels_it(monkeypatch):
+    # The recheck fetches /devices and then compares it with the entry's
+    # devices. As a task of Home Assistant itself it outlived an unload: the
+    # fetch came back and the comparison ran against an entry that was gone.
+    fetch_done = asyncio.Event()
+    progress = []
+
+    async def _slow_check(hass, entry_id, hub, dry_run=True):
+        progress.append("fetching")
+        await fetch_done.wait()  # the /devices fetch, still on its way
+        progress.append("compared with the entry")
+        return []
+
+    monkeypatch.setattr(_sd, "async_remove_stale_devices", _slow_check)
+    listener, entry = _listener(debounce=0.01, run_tasks=True)
+    listener.on_message(None, REMOVED)
+    _drain(listener._loop, 0.05)
+    assert progress == ["fetching"]
+
+    entry.unload()
+    fetch_done.set()
+    _drain(listener._loop, 0.05)
+
+    assert progress == ["fetching"]
+    assert entry.created == 1
+
+
+def test_no_recheck_when_the_entry_is_gone():
+    listener, entry = _listener(debounce=0.01)
+    listener._config_entry_id = "removed"
+    listener.on_message(None, REMOVED)
+    _drain(listener._loop, 0.05)
+    assert entry.created == 0

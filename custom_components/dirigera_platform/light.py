@@ -20,7 +20,7 @@ from homeassistant.core import HomeAssistantError
 from homeassistant.helpers.entity import DeviceInfo
 
 from .const import DOMAIN, CONF_HIDE_DEVICE_SET_BULBS, PLATFORM, DISCOVERY_COORDINATOR
-from .hub_event_listener import hub_event_listener, registry_entry, to_snake_case
+from .hub_event_listener import hub_event_listener, registry_entry, to_snake_case, live_writes, replace_model
 from .device_discovery import get_discovery_coordinator
 from .hub_writer import writer_for
 from .pending_command import PendingCommand
@@ -407,12 +407,12 @@ class ikea_bulb(LightEntity):
         try:
             logger.debug("async update called on bulb..")
             # The fetched model replaces the one hub events write to, and it is
-            # as old as the hub's answer: an event that arrives while the fetch
-            # is on its way is newer. Those of this bulb are held and applied to
-            # the new model after it is in place.
-            with hub_event_listener.hold_state_events(self._hub.websocket_base_url, self):
-                self._json_data = await self.hass.async_add_executor_job(self._hub.get_light_by_id, self._json_data.id)
-                self.set_state()
+            # as old as the hub's answer: what an event wrote to this bulb while
+            # the fetch was on its way is newer and is carried over.
+            with live_writes() as newer:
+                fetched = await self.hass.async_add_executor_job(self._hub.get_light_by_id, self._json_data.id)
+            replace_model(self, fetched, newer)
+            self.set_state()
         except Exception as ex:
             logger.error("error encountered running update on : {}".format(self.name))
             logger.error(ex)

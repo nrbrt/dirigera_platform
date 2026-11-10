@@ -7,16 +7,13 @@ as old as the hub's answer; an event that arrived while the fetch was on its
 way was applied to the old model and thrown away with it. Environment sensors,
 blinds and air purifiers refresh this way every poll.
 
-ikea_bulb.async_update had the same loss and holds state events for the
-length of the fetch (hub_event_listener.hold_state_events, see
-test_single_writer_event_loop.py). The base device does the same now.
-
-The race is between one device's fetch and that device's events, so that is
-what a refresh holds: the events that end up at the refreshing entity,
-including those of another part of a split device that are routed to it. The
-events of every other device go through at once; a slow hub must not delay a
-motion sensor for the length of an environment sensor's poll. Only the
-reconnect resync, which replaces the state of every device, holds the hub.
+No event waits for a fetch: a slow hub must not delay a motion sensor, or the
+device's own events, for the length of a poll. Events are applied as they
+come, and what they wrote to the refreshing entity while the fetch was on its
+way (hub_event_listener.live_writes) is carried over to the fetched model,
+including what another part of a split device that is routed to it wrote.
+ikea_bulb.async_update and the reconnect resync follow the same rule (see
+test_single_writer_event_loop.py).
 
 base_classes.py is loaded standalone with the real hub_event_listener next to
 it, as in test_throttle_trailing_flush.py.
@@ -158,10 +155,14 @@ def test_events_flow_again_after_the_refresh(setup):
     assert setup.device._json_data.attributes.current_temperature == 26.0
 
 
-# --- a refresh holds its own device, not the hub --------------------------------
+# --- nothing waits for a fetch --------------------------------------------------
+#
+# A refresh used to hold the events of its device until the fetch was back, up
+# to the hub's timeout. Events are applied as they come now; the fetch learns
+# what they wrote (hub_event_listener.live_writes) and keeps it.
 
 @pytest.mark.parametrize("refresh", ["async_update", "_throttled_update"])
-def test_refresh_of_one_device_does_not_hold_another(setup, refresh):
+def test_events_are_applied_while_a_refresh_is_on_its_way(setup, refresh):
     motion = setup.other_device("motion_1")
     setup.answer["model"] = fetched = _model("env_1", 20.0)
     seen = {}
@@ -180,87 +181,73 @@ def test_refresh_of_one_device_does_not_hold_another(setup, refresh):
         await asyncio.sleep(0)
 
     setup.loop.run_until_complete(scenario())
-    assert seen["other"] == 30.0, "another device waited for this device's fetch"
-    assert seen["own"] == 20.0, "the device's own event was not held"
+    assert seen == {"other": 30.0, "own": 25.5}, "an event waited for the fetch"
     assert setup.device._json_data is fetched
     assert fetched.attributes.current_temperature == 25.5
 
 
-def test_refresh_holds_the_other_part_that_is_routed_to_the_device(setup):
+def test_refresh_keeps_what_the_other_part_routed_to_the_device_wrote(setup):
     # env_2 has no entity of its own; the listener routes it to env_1.
     setup.answer["model"] = fetched = _model("env_1", 20.0)
-    seen = {}
 
     async def scenario():
         update = asyncio.ensure_future(setup.device.async_update())
         await setup.loop.run_in_executor(None, setup.in_fetch.wait, 5)
         setup.send("env_2", 25.5)
         await asyncio.sleep(0)
-        seen["during"] = setup.device._json_data.attributes.current_temperature
         setup.release.set()
         await update
-        await asyncio.sleep(0)
 
     setup.loop.run_until_complete(scenario())
-    assert seen["during"] == 20.0
+    assert setup.device._json_data is fetched
     assert fetched.attributes.current_temperature == 25.5
 
 
-def test_two_devices_refreshing_each_hold_their_own(setup):
-    other = setup.other_device("env_9")
-    hold = setup.listener_cls.hold_state_events
+def test_refresh_takes_from_the_hub_what_no_event_wrote(setup):
+    fetched = _model("env_1", 23.0)
+    fetched.attributes.custom_name = "renamed"
+    setup.answer["model"] = fetched
 
     async def scenario():
-        with hold(HUB_KEY, setup.device):
-            with hold(HUB_KEY, other):
-                setup.send("env_9", 21.0)
-                setup.send("env_1", 22.0)
-                await asyncio.sleep(0)
-            # env_9 is done, env_1 is not.
-            assert other._json_data.attributes.current_temperature == 21.0
-            assert setup.device._json_data.attributes.current_temperature == 20.0
-        assert setup.device._json_data.attributes.current_temperature == 22.0
+        update = asyncio.ensure_future(setup.device.async_update())
+        await setup.loop.run_in_executor(None, setup.in_fetch.wait, 5)
+        setup.send("motion_1", 30.0)  # another device: nothing of env_1 is newer
+        await asyncio.sleep(0)
+        setup.release.set()
+        await update
 
+    setup.other_device("motion_1")
     setup.loop.run_until_complete(scenario())
+    assert fetched.attributes.current_temperature == 23.0
+    assert fetched.attributes.custom_name == "renamed"
 
 
-def test_events_of_one_device_keep_their_order(setup):
-    async def scenario():
-        with setup.listener_cls.hold_state_events(HUB_KEY, setup.device):
-            for value in (21.0, 22.0, 23.0):
-                setup.send("env_1", value)
-            await asyncio.sleep(0)
-        assert setup.device._json_data.attributes.current_temperature == 23.0
-
-    setup.loop.run_until_complete(scenario())
-
-
-def test_a_hold_without_a_device_holds_the_whole_hub(setup):
-    # The reconnect resync: its snapshot replaces the state of every device.
-    motion = setup.other_device("motion_1")
+def test_last_of_several_events_during_the_fetch_is_kept(setup):
+    setup.answer["model"] = fetched = _model("env_1", 20.0)
 
     async def scenario():
-        with setup.listener_cls.hold_state_events(HUB_KEY):
-            setup.send("motion_1", 30.0)
-            setup.send("env_1", 25.5)
-            await asyncio.sleep(0)
-            assert motion._json_data.attributes.current_temperature == 20.0
-            assert setup.device._json_data.attributes.current_temperature == 20.0
-        assert motion._json_data.attributes.current_temperature == 30.0
-        assert setup.device._json_data.attributes.current_temperature == 25.5
+        update = asyncio.ensure_future(setup.device.async_update())
+        await setup.loop.run_in_executor(None, setup.in_fetch.wait, 5)
+        for value in (21.0, 22.0, 23.0):
+            setup.send("env_1", value)
+        await asyncio.sleep(0)
+        setup.release.set()
+        await update
 
     setup.loop.run_until_complete(scenario())
+    assert fetched.attributes.current_temperature == 23.0
 
 
-def test_device_hold_inside_a_hub_hold_waits_for_the_hub(setup):
-    hold = setup.listener_cls.hold_state_events
+def test_event_before_the_fetch_began_does_not_count_as_newer(setup):
+    setup.answer["model"] = fetched = _model("env_1", 23.0)
 
     async def scenario():
-        with hold(HUB_KEY):
-            with hold(HUB_KEY, setup.device):
-                setup.send("env_1", 25.5)
-                await asyncio.sleep(0)
-            assert setup.device._json_data.attributes.current_temperature == 20.0
-        assert setup.device._json_data.attributes.current_temperature == 25.5
+        setup.send("env_1", 25.5)
+        await asyncio.sleep(0)
+        update = asyncio.ensure_future(setup.device.async_update())
+        await setup.loop.run_in_executor(None, setup.in_fetch.wait, 5)
+        setup.release.set()
+        await update
 
     setup.loop.run_until_complete(scenario())
+    assert fetched.attributes.current_temperature == 23.0

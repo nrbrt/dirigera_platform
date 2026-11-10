@@ -190,10 +190,80 @@ def _hold_back_energy_decrease(entity, key_attr, value_to_set) -> bool:
     )
     return True
 
+# --- A fetch of device state and the events that arrive while it is on its way --
+#
+# A fetched snapshot of device state is as old as the hub's answer. What a hub
+# message writes to a model while the fetch is on its way is newer, and the
+# snapshot must not put the older value back over it.
+#
+# Events are never kept waiting for a fetch: a slow or silent hub would delay a
+# motion sensor for as long as its timeout. They are applied as they come, and
+# whoever fetches opens a live_writes() for the length of the fetch. It records
+# which fields and attributes of which entity were written meanwhile, and the
+# fetcher leaves exactly those out of what it fetched:
+#
+# * a refresh of one device, which replaces the entity's model, carries the
+#   values written meanwhile over to the new model (replace_model);
+# * the reconnect resync leaves them out of the device's row of the snapshot.
+#
+# Event loop only, like everything that touches a model.
+_open_live_writes = []
+
+
+class _LiveWrites:
+    def __init__(self):
+        self._written = {}  # entity -> (hub keys of device fields, of attributes)
+
+    def _note(self, entity, attributes: bool, keys):
+        if keys:
+            self._written.setdefault(entity, (set(), set()))[attributes].update(keys)
+
+    def fields(self, entity) -> set:
+        """Hub keys of the device's own fields written since the fetch began."""
+        return self._written.get(entity, (frozenset(), frozenset()))[0]
+
+    def attributes(self, entity) -> set:
+        """Hub keys of the attributes written since the fetch began."""
+        return self._written.get(entity, (frozenset(), frozenset()))[1]
+
+
+@contextlib.contextmanager
+def live_writes():
+    """Record what hub messages write to entity models inside this block."""
+    writes = _LiveWrites()
+    _open_live_writes.append(writes)
+    try:
+        yield writes
+    finally:
+        _open_live_writes.remove(writes)
+
+
+def replace_model(entity, fetched, newer):
+    """Make `fetched` the entity's model. What hub messages wrote to the old
+    model while it was fetched (`newer`, from live_writes) is newer than the
+    hub's answer and is carried over."""
+    old = entity._json_data
+    for source, target, keys in (
+        (old, fetched, newer.fields(entity)),
+        (getattr(old, "attributes", None), getattr(fetched, "attributes", None),
+         newer.attributes(entity)),
+    ):
+        for key in keys:
+            name = to_snake_case(key)
+            try:
+                setattr(target, name, getattr(source, name))
+            except Exception as ex:
+                logger.warning(f"Could not keep the live {name} of {old.id}: {ex}")
+    entity._json_data = fetched
+
+
 def _write_fields(entity, model, values, held_back=None):
     """Write every hub value the model has a field for, as the type of that
     field. held_back(key, key_attr, value) may keep one value out. Returns the
-    hub keys that were written."""
+    hub keys that were written.
+
+    The one place where hub state reaches a model, so also where a fetch that
+    is on its way learns what became newer than its answer (live_writes)."""
     device_id = entity._json_data.id
     applied = set()
     for key, raw in values.items():
@@ -217,6 +287,8 @@ def _write_fields(entity, model, values, held_back=None):
         except Exception as ex:
             # One bad value must not drop the rest of the event.
             logger.warning(f"Failed to set {key} on {device_id}: {ex}")
+    for writes in _open_live_writes:
+        writes._note(entity, model is not entity._json_data, applied)
     return applied
 
 
@@ -323,22 +395,6 @@ class registry_entry:
             str = str + f"{self._cascade_entity}"
         return str
 
-class _state_hold:
-    """State events of one hub that wait for a fetch of device state.
-
-    hub counts the fetches that replace the state of every device (the
-    reconnect resync), entities those of one device, per entity. events are
-    the waiting (listener, message) pairs in arrival order."""
-
-    def __init__(self):
-        self.hub = 0
-        self.entities = {}
-        self.events = []
-
-    def covers(self, entity) -> bool:
-        return self.hub > 0 or entity in self.entities
-
-
 class hub_event_listener(threading.Thread):
     # Per-hub device registries: {hub_key: {device_id: registry_entry}}.
     # hub_key is the hub's websocket_base_url, which a hub's entities and its
@@ -358,44 +414,6 @@ class hub_event_listener(threading.Thread):
 
     def unregister_hub(hub_key: str):
         hub_event_listener.device_registry.pop(hub_key, None)
-        hub_event_listener._state_holds.pop(hub_key, None)
-
-    # A fetched snapshot of device state is older than any event that arrives
-    # while the fetch is on its way. Applying the event first and the snapshot
-    # after it would put the older value back, so whoever fetches a snapshot
-    # that replaces state holds the state events it would overwrite for that
-    # long; they are applied after it, in arrival order.
-    #
-    # The scope of the hold is the scope of the fetch. A refresh of one device
-    # passes its entity and holds the events that end up at that entity (its
-    # own, and those of another part of a split device that are routed to
-    # it); every other device goes on as usual, however long the fetch takes.
-    # Without an entity the whole hub is held: the reconnect resync replaces
-    # the state of all devices. {hub_key: _state_hold}. Event loop only, like
-    # everything that touches a model.
-    _state_holds = {}
-
-    @contextlib.contextmanager
-    def hold_state_events(hub_key: str, entity=None):
-        hold = hub_event_listener._state_holds.setdefault(hub_key, _state_hold())
-        if entity is None:
-            hold.hub += 1
-        else:
-            hold.entities[entity] = hold.entities.get(entity, 0) + 1
-        try:
-            yield
-        finally:
-            if entity is None:
-                hold.hub -= 1
-            elif hold.entities[entity] > 1:
-                hold.entities[entity] -= 1
-            else:
-                del hold.entities[entity]
-            # Each waiting event goes back to its listener, which applies it
-            # or keeps it waiting for a hold that still covers it.
-            waiting, hold.events = hold.events, []
-            for listener, msg in waiting:
-                listener._receive(msg)
 
     def find_registry_entry(id: str) -> registry_entry:
         # Hub-agnostic lookup for callers without a hub reference (e.g. device
@@ -785,32 +803,11 @@ class hub_event_listener(threading.Thread):
             logger.warning(f"discarding hub message that is not JSON: {ws_msg}")
             return
         try:
-            self._loop.call_soon_threadsafe(self._receive, msg)
+            self._loop.call_soon_threadsafe(self._apply_message, msg)
         except RuntimeError:
             # The event loop is closed: Home Assistant is shutting down and
             # nobody is left to tell (#42).
             pass
-
-    def _receive(self, msg):
-        """Event loop: apply a hub message, or keep it waiting while a fetch of
-        the state it changes is on its way (see hold_state_events)."""
-        hold = hub_event_listener._state_holds.get(self._hub_key)
-        if hold is not None and (hold.hub or hold.entities) and self._is_held(hold, msg):
-            hold.events.append((self, msg))
-            return
-        self._apply_message(msg)
-
-    def _is_held(self, hold, msg) -> bool:
-        if not isinstance(msg, dict) or msg.get("type") != "deviceStateChanged":
-            return False
-        if hold.hub:
-            return True
-        info = msg.get("data")
-        if not isinstance(info, dict) or "id" not in info:
-            return False
-        entry = self._own_registry().get(
-            self._registered_id(info["id"], info.get("deviceType", info.get("type"))))
-        return entry is not None and hold.covers(entry.entity)
 
     def _registered_id(self, id, device_type):
         """The id under which the entity for a hub device is registered: its
@@ -1050,25 +1047,49 @@ class hub_event_listener(threading.Thread):
         up. One /devices fetch (no per-device hammering); discovery is
         suppressed during the replay. See issue #39.
 
-        The snapshot is as old as the moment the hub built it. State events
-        that arrive from then on are newer, so they are held until the
-        snapshot has been applied (see hold_state_events)."""
+        The snapshot is as old as the moment the hub built it. Events that
+        arrive while it is fetched are applied at once, as always, and what
+        they wrote is left out of the snapshot: it is newer (see live_writes).
+        A device no event touched gets its whole row."""
         async with self._resync_lock:
-            with hub_event_listener.hold_state_events(self._hub_key):
+            with live_writes() as newer:
                 try:
                     devices = await self._hass.async_add_executor_job(self._hub.get, "/devices")
                 except Exception as ex:
                     logger.warning(f"State resync failed to fetch /devices: {ex}")
                     return
-                if not devices:
-                    return
-                self._resyncing = True
-                try:
-                    for device in devices:
-                        self._apply_message({"type": "deviceStateChanged", "data": device})
-                    logger.info(f"State resync applied for {len(devices)} devices after reconnect")
-                finally:
-                    self._resyncing = False
+            if not devices:
+                return
+            self._resyncing = True
+            try:
+                for device in devices:
+                    self._apply_message({"type": "deviceStateChanged",
+                                         "data": self._without_newer(device, newer)})
+                logger.info(f"State resync applied for {len(devices)} devices after reconnect")
+            finally:
+                self._resyncing = False
+
+    # What says which device a row is; never left out of it.
+    _ROW_IDENTITY = frozenset({"id", "type", "deviceType"})
+
+    def _without_newer(self, device, newer):
+        """A snapshot row without what was written to its entity after the
+        snapshot was asked for."""
+        if not isinstance(device, dict) or "id" not in device:
+            return device
+        entry = self._own_registry().get(self._registered_id(
+            device["id"], device.get("deviceType", device.get("type"))))
+        if entry is None:
+            return device
+        fields = newer.fields(entry.entity) - self._ROW_IDENTITY
+        attributes = newer.attributes(entry.entity)
+        if not fields and not attributes:
+            return device
+        row = {key: value for key, value in device.items() if key not in fields}
+        if isinstance(row.get("attributes"), dict):
+            row["attributes"] = {key: value for key, value in row["attributes"].items()
+                                 if key not in attributes}
+        return row
 
     def create_listener(self):
         try:

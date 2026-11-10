@@ -170,10 +170,12 @@ def test_resync_snapshot_older_than_a_live_event_keeps_the_live_value(setup):
     assert bulb.level == 90, "the older snapshot overwrote the live value"
 
 
-def test_events_held_during_a_resync_are_applied_in_arrival_order(setup):
+def test_live_event_during_a_resync_is_applied_at_once(setup):
+    # The resync used to hold every state event of the hub for the whole
+    # /devices fetch: a motion or door event waited up to the hub's timeout.
     bulb = setup.add("b6", level=30)
-    other = setup.add("b7", level=10)
-    gate, setup.hub.get = _gated_get([_snapshot("b6", lightLevel=30), _snapshot("b7", lightLevel=55)])
+    gate, setup.hub.get = _gated_get([_snapshot("b6", lightLevel=30)])
+    seen = {}
 
     async def scenario():
         resync = asyncio.ensure_future(setup.listener._resync_all_states())
@@ -181,14 +183,54 @@ def test_events_held_during_a_resync_are_applied_in_arrival_order(setup):
         for level in (60, 90, 75):
             setup.listener.on_message(None, _event("b6", lightLevel=level))
         await asyncio.sleep(0)
-        assert bulb.level == 30, "a state event was applied while the snapshot was in flight"
+        seen["level"], seen["writes"] = bulb.level, bulb.writes  # the fetch is still on its way
         gate.set()
         await resync
         await asyncio.sleep(0)
 
     setup.loop.run_until_complete(scenario())
-    assert bulb.level == 75
-    assert other.level == 55, "the resync must still catch up what no live event covered (#39)"
+    assert seen == {"level": 75, "writes": 3}, "a live event waited for the snapshot"
+    assert bulb.level == 75, "the older snapshot overwrote the live value"
+
+
+def test_resync_gives_a_device_no_live_event_touched_its_whole_row(setup):
+    bulb = setup.add("b6", level=30)
+    other = setup.add("b7", level=10)
+    gate, setup.hub.get = _gated_get([_snapshot("b6", isOn=False, lightLevel=30),
+                                      _snapshot("b7", isOn=False, lightLevel=55)])
+
+    async def scenario():
+        resync = asyncio.ensure_future(setup.listener._resync_all_states())
+        await asyncio.sleep(0.05)
+        setup.listener.on_message(None, _event("b6", lightLevel=90))
+        await asyncio.sleep(0)
+        gate.set()
+        await resync
+        await asyncio.sleep(0)
+
+    setup.loop.run_until_complete(scenario())
+    assert (other.level, other._json_data.attributes.is_on) == (55, False), \
+        "the resync must still catch up what no live event covered (#39)"
+    # Of the device that did get a live event: only what the event wrote is
+    # newer than the snapshot. The rest of its row was missed while offline.
+    assert bulb.level == 90
+    assert bulb._json_data.attributes.is_on is False
+
+
+def test_live_event_after_the_snapshot_was_applied_is_just_an_event(setup):
+    bulb = setup.add("b6", level=30)
+    setup.hub.get = lambda route: [_snapshot("b6", lightLevel=55)]
+
+    async def scenario():
+        await setup.listener._resync_all_states()
+        setup.listener.on_message(None, _event("b6", lightLevel=90))
+        await asyncio.sleep(0)
+        setup.hub.get = lambda route: [_snapshot("b6", lightLevel=40)]
+        await setup.listener._resync_all_states()  # the next reconnect
+
+    setup.loop.run_until_complete(scenario())
+    assert bulb.level == 40, "a live write from before this fetch kept the snapshot out"
+    assert hel._open_live_writes == []
 
 
 def test_events_flow_again_after_a_failed_resync(setup):
@@ -221,6 +263,8 @@ def _bulb_async_update():
     method = next(n for n in bulb.body if isinstance(n, ast.AsyncFunctionDef) and n.name == "async_update")
     ns = {
         "hub_event_listener": L,
+        "live_writes": hel.live_writes,
+        "replace_model": hel.replace_model,
         "HomeAssistantError": Exception,
         "DOMAIN": "dirigera_platform",
         "logger": logging.getLogger(__name__),
@@ -254,9 +298,9 @@ def test_bulb_update_does_not_lose_an_event_that_arrives_during_the_fetch(setup)
     assert bulb.level == 90, "the fetched model replaced a newer live value"
 
 
-def test_bulb_update_does_not_hold_the_events_of_another_bulb(setup):
-    # The hold of a refresh is for the refreshing device only: on a slow hub
-    # the fetch can take seconds.
+def test_bulb_update_holds_no_events(setup):
+    # On a slow hub the fetch can take seconds; events are applied as they
+    # come, those of the refreshing bulb too.
     bulb = setup.add("b9", level=30)
     other = setup.add("b10", level=30)
     fetched = SimpleNamespace(id="b9", relation_id=None, room=None, is_reachable=True,
@@ -281,6 +325,6 @@ def test_bulb_update_does_not_hold_the_events_of_another_bulb(setup):
         await asyncio.sleep(0)
 
     setup.loop.run_until_complete(scenario())
-    assert seen == {"other": 90, "own": 30}
+    assert seen == {"other": 90, "own": 80}
     assert bulb._json_data is fetched
     assert bulb.level == 80

@@ -28,7 +28,7 @@ from dirigera.devices.light_sensor import LightSensor
 from dirigera.devices.controller import Controller
 from dirigera.devices.air_purifier import FanModeEnum
 
-from .hub_event_listener import hub_event_listener, registry_entry
+from .hub_event_listener import hub_event_listener, registry_entry, live_writes, replace_model
 from .hub_writer import writer_for
 from .const import DOMAIN, DEFAULT_POWER_PUSH_THROTTLE
 from .compat import MICROGRAMS_PER_CUBIC_METER, PARTS_PER_MILLION
@@ -166,11 +166,11 @@ class ikea_base_device:
 
         The fetched model replaces the one hub events write to, and it is as
         old as the hub's answer: an event that arrives while the fetch is on
-        its way is newer. Those of this device are held and applied to the new
-        model once it is in place (or to the old one when the fetch fails);
-        the events of other devices are not kept waiting."""
-        with hub_event_listener.hold_state_events(self._hub.websocket_base_url, self):
-            self._json_data = await self._hass.async_add_executor_job(self._get_by_id_fx, self._json_data.id)
+        its way is newer. Events are applied as they come; what they wrote to
+        this device meanwhile is carried over to the new model."""
+        with live_writes() as newer:
+            fetched = await self._hass.async_add_executor_job(self._get_by_id_fx, self._json_data.id)
+        replace_model(self, fetched, newer)
 
     async def async_update(self):
         if self.skip_update:

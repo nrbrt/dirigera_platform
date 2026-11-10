@@ -690,3 +690,50 @@ def test_run_without_a_started_worker_fails_fast():
             await asyncio.wait_for(HubWriter(_Hass(), hub).run(hub.request, "x"), 1)
 
     asyncio.run(main())
+
+
+# --- more than one hub ------------------------------------------------------------
+
+def test_a_slow_hub_does_not_hold_up_the_queue_of_another_hub():
+    slow, quick = _Hub("wss://slow"), _Hub("wss://quick", takes=0.0)
+    slow.gate = threading.Event()
+
+    async def main():
+        writer_slow, writer_quick = _writer(slow), _writer(quick)
+        try:
+            stuck = asyncio.ensure_future(writer_slow.run(slow.request, "stuck"))
+            await asyncio.sleep(0.05)
+            done = await asyncio.wait_for(writer_quick.run(quick.request, "other hub"), 1)
+            slow.gate.set()
+            await stuck
+            return done
+        finally:
+            slow.gate.set()
+            writer_slow.stop()
+            writer_quick.stop()
+
+    assert asyncio.run(main()) == "other hub"
+
+
+def test_a_dead_hub_fails_only_its_own_queue():
+    dead, alive = _Hub("wss://dead"), _Hub("wss://alive")
+
+    def unreachable():
+        time.sleep(0.1)
+        raise requests.ConnectionError("no answer")
+
+    async def main():
+        writer_dead, writer_alive = _writer(dead), _writer(alive)
+        try:
+            return await asyncio.gather(
+                *(writer_dead.run(unreachable) for _ in range(3)),
+                *(writer_alive.run(alive.request, n) for n in range(3)),
+                return_exceptions=True)
+        finally:
+            writer_dead.stop()
+            writer_alive.stop()
+
+    results = asyncio.run(main())
+    assert isinstance(results[0], requests.ConnectionError)
+    assert all(isinstance(r, hub_writer.HubUnreachable) for r in results[1:3]), results
+    assert results[3:] == [0, 1, 2], "the other hub's commands were failed too"

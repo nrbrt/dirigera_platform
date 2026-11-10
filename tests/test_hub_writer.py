@@ -650,3 +650,43 @@ def test_process_shutdown_ends_a_worker_whose_entry_was_never_unloaded():
     writer = asyncio.run(main())  # asyncio.run cancels all tasks, as the runner does
     assert writer._task.cancelled()
     assert writer._stopped
+
+
+# --- a worker that never ran ----------------------------------------------------
+#
+# A task that is cancelled before its first step never runs its coroutine, so
+# the worker's `finally` did not run either: the writer still looked alive,
+# and run() waited for ever on a queue nobody reads.
+
+@pytest.mark.parametrize("make_task", [
+    asyncio.ensure_future,
+    lambda work: asyncio.get_running_loop().create_task(work),
+    lambda work: asyncio.Task(work, loop=asyncio.get_running_loop(), eager_start=True),
+])
+@pytest.mark.parametrize("wait_before_run", [False, True])
+def test_run_fails_fast_when_the_worker_was_cancelled_before_it_started(make_task, wait_before_run):
+    hub = _Hub()
+
+    async def main():
+        writer = HubWriter(_Hass(), hub, min_spacing=0)
+        writer.start(make_task)
+        writer._task.cancel()  # not through stop(): whoever owns the task did it
+        if wait_before_run:
+            await asyncio.sleep(0)
+        with pytest.raises(hub_writer.HubWriterStopped):
+            await asyncio.wait_for(writer.run(hub.request, "x"), 1)
+        with pytest.raises(hub_writer.HubWriterStopped):
+            hub_writer.writer_for(hub)
+
+    asyncio.run(main())
+    assert hub.sent() == []
+
+
+def test_run_without_a_started_worker_fails_fast():
+    hub = _Hub()
+
+    async def main():
+        with pytest.raises(hub_writer.HubWriterStopped):
+            await asyncio.wait_for(HubWriter(_Hass(), hub).run(hub.request, "x"), 1)
+
+    asyncio.run(main())

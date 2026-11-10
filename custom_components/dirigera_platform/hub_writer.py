@@ -68,6 +68,15 @@ class HubWriter:
         (see start_hub_writer)."""
         _writers.setdefault(self._key, []).append(self)
         self._task = (create_task or asyncio.ensure_future)(self._work())
+        # However the task ends, the writer is closed with it. The worker's
+        # own `finally` is not enough: a task cancelled before its first step
+        # never runs its coroutine.
+        self._task.add_done_callback(lambda task: self._close())
+
+    @property
+    def running(self) -> bool:
+        """True while there is a worker to take commands."""
+        return not self._stopped and self._task is not None and not self._task.done()
 
     def stop(self):
         """End the worker; what is waiting, or with the hub, fails for its caller."""
@@ -97,7 +106,8 @@ class HubWriter:
         `started` is called on the event loop when the command's turn has
         come, right before it goes to the hub; not at all for a command that
         is never sent."""
-        if self._stopped:
+        if not self.running:
+            # No worker: nobody would take this from the queue.
             raise HubWriterStopped(f"the integration for hub {self._key} is not loaded")
         future = asyncio.get_running_loop().create_future()
         self._queue.put_nowait((fn, args, started, future))
@@ -169,7 +179,7 @@ def _fail(future, error):
 def writer_for(hub) -> HubWriter:
     """The writer of this hub. Hubs are told apart by their websocket address:
     entities, discovery and scenes each hold their own hub object."""
-    writers = _writers.get(hub.websocket_base_url)
+    writers = [writer for writer in _writers.get(hub.websocket_base_url, ()) if writer.running]
     if not writers:
         raise HubWriterStopped(f"the integration for hub {hub.websocket_base_url} is not loaded")
     return writers[-1]

@@ -154,6 +154,29 @@ def hub_level_to_brightness(level):
     return round(level * 255 / 100)
 
 
+def hub_value(attribute, value):
+    """`value` as the hub stores and reports it for this model attribute.
+
+    The hub keeps colour values in the bulb's own units, so what it reports
+    after a PATCH is not what was sent (measured on a live hub, 10-11-2026):
+
+    * colour temperature in whole mireds: 2700 K comes back as 2702, 2900 as 2898;
+    * hue in 1/65536 of the circle: 30 comes back as 29.9981689453125;
+    * saturation in 1/254: 0.5 stays 0.5 (127/254), 0.634 becomes 161/254.
+
+    This is the one place that knows; the record of a pending command and the
+    value the model assumes both come from here, so the hub's echo matches and
+    the model never holds a value the hub does not have. Everything else
+    (isOn, lightLevel, colorMode) is stored as sent."""
+    if attribute == "color_temperature":
+        return int(1_000_000 / round(1_000_000 / value))
+    if attribute == "color_hue":
+        return round(value * 65536 / 360) * 360 / 65536
+    if attribute == "color_saturation":
+        return round(value * 254) / 254
+    return value
+
+
 def light_turn_on_patch(can_receive, kwargs, kelvin_range):
     """The PATCH body that turns a bulb on with what HA asked for, as one request (#71).
 
@@ -164,8 +187,12 @@ def light_turn_on_patch(can_receive, kwargs, kelvin_range):
     The order is isOn, then colour, then lightLevel (see below).
 
     Returns (data, updates): the PATCH body and the model values it stands
-    for, after clamping and rounding. Those are the values the hub's echo is
-    compared with, and what the model assumes once the hub accepted the PATCH.
+    for, as the hub will store them (clamped, rounded, and through
+    hub_value). Those are the values the hub's echo is compared with, and
+    what the model assumes once the hub accepted the PATCH.
+
+    isOn is always part of the body: a lightLevel sent on its own to a bulb
+    that is off is not applied by the hub (measured 10-11-2026).
     """
     items = [{"isOn": True}]
     updates = {"is_on": True}
@@ -176,7 +203,7 @@ def light_turn_on_patch(can_receive, kwargs, kelvin_range):
         if low is not None and high is not None:
             ct = max(low, min(high, ct))
         items.append({"colorTemperature": ct})
-        updates["color_temperature"] = ct
+        updates["color_temperature"] = hub_value("color_temperature", ct)
         updates["color_mode"] = "temperature"
 
     if ATTR_HS_COLOR in kwargs and "colorHue" in can_receive and "colorSaturation" in can_receive:
@@ -184,8 +211,8 @@ def light_turn_on_patch(can_receive, kwargs, kelvin_range):
         hue = max(0.0, min(360.0, float(hue)))
         saturation = max(0.0, min(1.0, float(saturation) / 100))  # 0-1 at IKEA
         items.append({"colorHue": hue, "colorSaturation": saturation})
-        updates["color_hue"] = hue
-        updates["color_saturation"] = saturation
+        updates["color_hue"] = hub_value("color_hue", hue)
+        updates["color_saturation"] = hub_value("color_saturation", saturation)
         updates["color_mode"] = "color"
 
     # lightLevel last. On TRADFRI bulbs (live hub, 9-11-2026) a

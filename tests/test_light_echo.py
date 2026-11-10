@@ -355,15 +355,39 @@ def test_clamped_colour_temperature_is_what_the_echo_must_match(setup):
     assert bulb.color_temp_kelvin == 3000
 
 
+def test_hubs_own_colour_temperature_is_the_echo_and_the_model_value(setup):
+    # The hub stores mireds: 2700 K is reported as 2702 (live hub, 10-11-2026).
+    bulb = setup.bulb(DUAL, color_temperature=4000, color_temperature_min=4000,
+                      color_temperature_max=2202, color_mode="temperature")
+    setup.run(bulb.async_turn_on(color_temp_kelvin=2700))
+    assert setup.hub.sent[-1][1][1] == {"attributes": {"colorTemperature": 2700}}
+    assert bulb.color_temp_kelvin == 2702, "the model holds a value the hub never has"
+    setup.hub_says(colorTemperature=2702)  # the echo
+    setup.hub_says(colorTemperature=3003)  # confirmed, so this is a change
+    assert bulb.color_temp_kelvin == 3003
+
+
+def test_hubs_own_hue_and_saturation_are_the_echo(setup):
+    bulb = setup.bulb(DUAL, color_hue=10.0, color_saturation=0.2, color_mode="color")
+    setup.run(bulb.async_turn_on(hs_color=(30.0, 50.0)))
+    a = bulb._json_data.attributes
+    assert (a.color_hue, a.color_saturation) == (29.9981689453125, 0.5)
+    setup.hub_says(colorHue=29.9981689453125, colorSaturation=0.5)  # the echo
+    setup.hub_says(colorHue=200)  # confirmed, so this is a change
+    assert a.color_hue == 200.0
+
+
 def test_brightness_and_colour_together_are_each_held_on_their_own(setup):
     bulb = setup.bulb(DUAL, light_level=30, color_temperature=2700, color_hue=10.0,
                       color_saturation=0.2, color_mode="temperature")
     setup.run(bulb.async_turn_on(brightness=204, hs_color=(120.0, 80.0)))
     assert bulb.color_mode == ColorMode.HS
-    # The colour is confirmed, the level and the mode are still the old ones.
-    setup.hub_says(colorHue=120, colorSaturation=0.8, lightLevel=30, colorMode="temperature")
+    # The colour is confirmed, in the hub's own units; the level and the mode
+    # are still the old ones.
+    hue, saturation = 21845 * 360 / 65536, 203 / 254
+    setup.hub_says(colorHue=hue, colorSaturation=saturation, lightLevel=30, colorMode="temperature")
     a = bulb._json_data.attributes
-    assert (a.color_hue, a.color_saturation, a.light_level) == (120.0, 0.8, 80)
+    assert (a.color_hue, a.color_saturation, a.light_level) == (hue, saturation, 80)
     assert bulb.color_mode == ColorMode.HS
     setup.hub_says(colorHue=200)  # confirmed, so this is a change
     assert a.color_hue == 200.0

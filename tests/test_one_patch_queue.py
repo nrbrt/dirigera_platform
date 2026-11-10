@@ -48,7 +48,7 @@ def _load():
     with open(LIGHT) as fh:
         tree = ast.parse(fh.read())
     funcs = [n for n in tree.body if isinstance(n, ast.FunctionDef)
-             and n.name in ("brightness_to_hub_level", "light_turn_on_patch")]
+             and n.name in ("brightness_to_hub_level", "hub_value", "light_turn_on_patch")]
     bulb = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "ikea_bulb")
     methods = [n for n in bulb.body if isinstance(n, ast.AsyncFunctionDef)
                and n.name in ("_send", "async_turn_on", "async_turn_off")]
@@ -68,6 +68,7 @@ def _load():
 
 NS = _load()
 patch_for = NS["light_turn_on_patch"]
+hub_value = NS["hub_value"]
 
 DUAL = ["isOn", "lightLevel", "colorTemperature", "colorHue", "colorSaturation"]
 DIMMABLE = ["isOn", "lightLevel"]
@@ -124,6 +125,48 @@ def test_what_the_bulb_cannot_receive_is_left_out():
     assert "color_mode" not in updates
 
 
+# --- the hub's own representation ---------------------------------------------
+
+# Sent to a live hub and read back from /devices (10-11-2026).
+@pytest.mark.parametrize("attribute, sent, reported", [
+    ("color_temperature", 2700, 2702),
+    ("color_temperature", 2702, 2702),
+    ("color_temperature", 3003, 3003),
+    ("color_hue", 30, 29.9981689453125),
+    ("color_hue", 30.2288818359375, 30.2288818359375),   # 5503/65536 of the circle
+    ("color_saturation", 0.5, 0.5),
+    ("color_saturation", 0.6338582677165354, 0.6338582677165354),  # 161/254
+    ("color_saturation", 0.634, 0.6338582677165354),
+])
+def test_hub_value_is_what_the_hub_reported(attribute, sent, reported):
+    assert hub_value(attribute, sent) == reported
+
+
+def test_hub_value_follows_the_mired_rule():
+    assert hub_value("color_temperature", 2900) == 2898  # 345 mireds
+
+
+def test_hub_value_leaves_the_rest_as_sent():
+    assert hub_value("light_level", 37) == 37
+    assert hub_value("is_on", True) is True
+    assert hub_value("color_mode", "color") == "color"
+
+
+def test_the_body_carries_what_was_asked_and_the_updates_what_the_hub_will_report():
+    data, updates = patch_for(DUAL, {"color_temp_kelvin": 2700}, RANGE)
+    assert _items(data)[1] == {"colorTemperature": 2700}
+    assert updates["color_temperature"] == 2702
+    data, updates = patch_for(DUAL, {"hs_color": (30.0, 50.0)}, RANGE)
+    assert _items(data)[1] == {"colorHue": 30.0, "colorSaturation": 0.5}
+    assert (updates["color_hue"], updates["color_saturation"]) == (29.9981689453125, 0.5)
+
+
+def test_a_level_never_goes_out_without_is_on():
+    # The hub ignores a lightLevel sent on its own to a bulb that is off.
+    for kwargs in ({"brightness": 94}, {"brightness": 94, "color_temp_kelvin": 2700}, {}):
+        assert _items(patch_for(DUAL, kwargs, RANGE)[0])[0] == {"isOn": True}
+
+
 # --- ikea_bulb.async_turn_on / async_turn_off --------------------------------
 
 class _Hub:
@@ -167,7 +210,9 @@ def test_turn_on_sends_one_patch_and_updates_the_model(monkeypatch):
         {"attributes": {"lightLevel": 45}},
     ])]
     a = bulb._json_data.attributes
-    assert (a.is_on, a.light_level, a.color_hue, a.color_saturation, a.color_mode) == (True, 45, 120.0, 0.8, "color")
+    # The model assumes what the hub will report, not what was sent.
+    assert (a.is_on, a.light_level, a.color_mode) == (True, 45, "color")
+    assert (a.color_hue, a.color_saturation) == (21845 * 360 / 65536, 203 / 254)
     # What was sent is kept until the hub confirms it (test_light_echo.py).
     assert bulb._pending.holds_back("light_level", 10) is True
 

@@ -232,6 +232,24 @@ class ikea_base_device:
                 # the same window — one attempt per device per ttl.
                 self._updated_at = time.monotonic()
 
+    async def _command(self, fn, *args, accepted=None):
+        """Send a command of this device and publish what it changed.
+
+        The blocking fn(*args) (a setter of the library model, which writes
+        the model once the hub accepted the request) runs through the hub's
+        writer. After that every entity of the device writes its state: its
+        entities are not polled when the device is push-driven, so nothing
+        else would publish the new value until the hub's event came, if it
+        came. `accepted` runs in between, for what a command changes in the
+        model on top of the setter. A command that fails writes nothing.
+
+        Every command method of a device goes through here."""
+        result = await writer_for(self._hub).run(fn, *args)
+        if accepted is not None:
+            accepted()
+        self.async_schedule_update_ha_state(False)
+        return result
+
     # To ensure state update of hass is cascaded. Event loop only: hub events
     # are applied on the loop (hub_event_listener), as are commands.
     def async_schedule_update_ha_state(self, force_refresh:bool = False) -> None:
@@ -384,7 +402,7 @@ class ikea_outlet_device(ikea_base_device):
     async def async_turn_on(self):
         logger.debug("outlet turn_on")
         try:
-            await writer_for(self._hub).run(self._json_data.set_on, True)
+            await self._command(self._json_data.set_on, True)
         except Exception as ex:
             logger.error("error encountered turning on : {}".format(self.name))
             logger.error(ex)
@@ -393,7 +411,7 @@ class ikea_outlet_device(ikea_base_device):
     async def async_turn_off(self):
         logger.debug("outlet turn_off")
         try:
-            await writer_for(self._hub).run(self._json_data.set_on, False)
+            await self._command(self._json_data.set_on, False)
         except Exception as ex:
             logger.error("error encountered turning off : {}".format(self.name))
             logger.error(ex)
@@ -537,21 +555,23 @@ class ikea_blinds_device(ikea_base_device):
     
     async def async_open_cover(self):
         self._stop_requested = False
-        await writer_for(self._hub).run(self._json_data.set_target_level, 0)
+        await self._command(self._json_data.set_target_level, 0)
 
     async def async_close_cover(self):
         self._stop_requested = False
-        await writer_for(self._hub).run(self._json_data.set_target_level, 100)
+        await self._command(self._json_data.set_target_level, 100)
 
     async def async_set_cover_position(self, position:int):
         if position >= 0 and position <= 100:
             self._stop_requested = False
-            await writer_for(self._hub).run(self._json_data.set_target_level,100 - position)
+            await self._command(self._json_data.set_target_level,100 - position)
 
     async def async_stop_cover(self):
         if not self.can_stop:
             raise HomeAssistantError(f"{self.name} does not support stopping")
-        await writer_for(self._hub).run(self._send_stop)
+        await self._command(self._send_stop, accepted=self._stopped)
+
+    def _stopped(self) -> None:
         # Only after the hub accepted it, so a failed request leaves state alone.
         attributes = self._json_data.attributes
         self._stop_target_level = attributes.blinds_target_level
@@ -887,19 +907,19 @@ class ikea_starkvind_air_purifier_device(ikea_base_device):
         # Convert percent to speed
         desired_speed = math.ceil(percentage * 50 / 100)
         logger.debug("set_percentage got : {}, scaled to : {}".format(percentage, desired_speed))
-        await writer_for(self._hub).run(self._json_data.set_motor_state, desired_speed)
+        await self._command(self._json_data.set_motor_state, desired_speed)
 
     async def async_set_status_light(self, status: bool) -> None:
         logger.debug("set_status_light : {}".format(status))
-        await writer_for(self._hub).run(self._json_data.set_status_light, status)
+        await self._command(self._json_data.set_status_light, status)
 
     async def async_set_child_lock(self, status: bool) -> None:
         logger.debug("set_child_lock : {}".format(status))
-        await writer_for(self._hub).run(self._json_data.set_child_lock, status)
+        await self._command(self._json_data.set_child_lock, status)
 
     async def async_set_fan_mode(self, preset_mode: FanModeEnum) -> None:
         logger.debug("set_fan_mode : {}".format(preset_mode.value))
-        await writer_for(self._hub).run(self._json_data.set_fan_mode, preset_mode)
+        await self._command(self._json_data.set_fan_mode, preset_mode)
 
     async def async_set_preset_mode(self, preset_mode: str):
         logger.debug("set_preset_mode : {}".format(preset_mode))
@@ -920,7 +940,7 @@ class ikea_starkvind_air_purifier_device(ikea_base_device):
             return
 
         logger.debug("set_preset_mode equated to : {}".format(mode_to_set.value))
-        await writer_for(self._hub).run(self._json_data.set_fan_mode, mode_to_set)
+        await self._command(self._json_data.set_fan_mode, mode_to_set)
         
     async def async_turn_on(self, percentage=None, preset_mode=None) -> None:
         logger.debug("Airpurifier call to turn_on with percentage: {}, preset_mode: {}".format(percentage, preset_mode))

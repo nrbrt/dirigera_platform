@@ -72,6 +72,9 @@ class _StubDevice:
     def name(self):
         return "Test blind"
 
+    def async_schedule_update_ha_state(self, force_refresh=False):
+        pass
+
 
 class _Writer:
     """Stands in for the hub's writer (test_hub_writer.py): runs it at once."""
@@ -105,8 +108,12 @@ def _load_classes():
         "logger": SimpleNamespace(debug=lambda *a, **k: None),
         "writer_for": lambda hub: _Writer(),
     }
-    module = ast.Module(body=nodes, type_ignores=[])
+    # The real command path of the base device, on the stub.
+    base = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "ikea_base_device")
+    command = next(n for n in base.body if getattr(n, "name", None) == "_command")
+    module = ast.Module(body=[command] + nodes, type_ignores=[])
     exec(compile(ast.fix_missing_locations(module), BASE_CLASSES, "exec"), namespace)
+    _StubDevice._command = namespace["_command"]
     return namespace["ikea_blinds_device"], namespace["ikea_blinds_sensor"]
 
 

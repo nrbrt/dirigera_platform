@@ -328,6 +328,9 @@ class _StubDevice:
     preset_mode = None
     percentage = 0
 
+    def async_schedule_update_ha_state(self, force_refresh=False):
+        pass
+
 
 class FanModeEnum(enum.Enum):
     OFF = "off"
@@ -361,9 +364,18 @@ def _load_devices():
         "logger": logging.getLogger(__name__),
         "writer_for": hub_writer.writer_for,
     }
-    return _lift("base_classes.py",
-                 ["ikea_outlet_device", "ikea_blinds_device", "ikea_starkvind_air_purifier_device"],
-                 namespace)
+    devices = _lift("base_classes.py",
+                    ["ikea_outlet_device", "ikea_blinds_device", "ikea_starkvind_air_purifier_device"],
+                    namespace)
+    # The real command path of the base device, on the stub.
+    with open(os.path.join(COMPONENT, "base_classes.py")) as fh:
+        base = next(n for n in ast.parse(fh.read()).body
+                    if isinstance(n, ast.ClassDef) and n.name == "ikea_base_device")
+    command = next(n for n in base.body if getattr(n, "name", None) == "_command")
+    exec(compile(ast.fix_missing_locations(ast.Module(body=[command], type_ignores=[])),
+                 "base_classes.py", "exec"), namespace)
+    _StubDevice._command = namespace["_command"]
+    return devices
 
 
 def _load_scene():

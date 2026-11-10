@@ -107,13 +107,15 @@ Open **Configure** on the integration to change these. Saving no longer asks you
 
 ## Bug Reports & Feature Requests
 
-When opening an issue, please include a device data dump, it helps enormously:
+When opening an issue, please attach a diagnostics file, it helps enormously:
 
-1. Go to **Developer Tools** → **Services**
-2. Call `dirigera_platform.dump_data` (no parameters needed)
-3. Copy the output from the Home Assistant log
+1. Go to **Settings** → **Devices & services** → **IKEA Dirigera Hub Integration**
+2. Open the three-dot menu next to your hub and choose **Download diagnostics**
+3. Attach the file to the issue
 
-See [detailed instructions](docs/dump-data.md).
+Nothing is collected or sent by itself: the file is only made when you click. Your hub's address and token, serial numbers, coordinates and the names of your devices, rooms and groups are removed; device ids are replaced by neutral ones (`device-07_3`) that keep their structure. Please look it over before you post it anyway.
+
+The older `dirigera_platform.dump_data` service still works and writes the same anonymised list to the Home Assistant log, see [detailed instructions](docs/dump-data.md).
 
 ## Changelog
 

@@ -1,6 +1,7 @@
 """Platform for IKEA dirigera hub integration."""
 from __future__ import annotations
 
+import json
 import logging
 
 from dirigera import Hub 
@@ -33,6 +34,7 @@ from .const import (
 from .hub_event_listener import hub_event_listener
 from .hub_writer import start_hub_writer
 from .stale_devices import async_remove_stale_devices, is_stale, known_identifiers
+from .anonymise import anonymise_devices
 from .device_discovery import DeviceDiscoveryCoordinator, set_discovery_coordinator
 
 PLATFORMS_TO_SETUP = [  Platform.SWITCH, 
@@ -184,94 +186,13 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         logger.info("--------------")
         hub = dirigera.Hub(token, ip)
         json_resp = hub.get("/devices")
-        logger.debug(f"TYPE IS {type(json_resp)}")
-        #import json 
-        #devices_json = json.loads(json_resp)
-        # Sanitize the dump
-                
-        master_id_map = {}
-        id_counter = 1
-        for device_json in json_resp:
-            if "id" in device_json:
-                id_value = device_json["id"]
-                id_to_replace = id_counter 
-                
-                if id_value in master_id_map:
-                    id_to_replace = master_id_map[id_value]
-                else:
-                    id_counter = id_counter + 1
-                    master_id_map[id_value] = id_to_replace
-                
-                device_json["id"] = id_to_replace
-                
-            if "relationId" in device_json:
-                id_value = device_json["relationId"]
-                id_to_replace = id_counter
-
-                if id_value in master_id_map:
-                    id_to_replace = master_id_map[id_value]
-                else:
-                    id_counter = id_counter + 1
-                    master_id_map[id_value] = id_to_replace
-
-                # used to overwrite "id" again, leaving relationId unsanitized
-                device_json["relationId"] = id_to_replace
-            
-            if "attributes" in device_json and "serialNumber" in device_json["attributes"]:
-                id_value = device_json["attributes"]["serialNumber"]
-                id_to_replace = id_counter 
-                
-                if id_value in master_id_map:
-                    id_to_replace = master_id_map[id_value]
-                else:
-                    id_counter = id_counter + 1
-                    master_id_map[id_value] = id_to_replace
-                
-                device_json["attributes"]["serialNumber"] = id_to_replace
-            
-            if "room" in device_json and "id" in device_json["room"]:
-                id_value = device_json["room"]["id"]
-                id_to_replace = id_counter 
-                
-                if id_value in master_id_map:
-                    id_to_replace = master_id_map[id_value]
-                else:
-                    id_counter = id_counter + 1
-                    master_id_map[id_value] = id_to_replace
-                
-                device_json["room"]["id"] = id_to_replace
-            
-            if "deviceSet" in device_json:
-                for device_set in device_json["deviceSet"]:
-                    if "id" in device_set:
-                        id_value = device_set["id"]
-                        id_to_replace = id_counter 
-                        
-                        if id_value in master_id_map:
-                            id_to_replace = master_id_map[id_value]
-                        else:
-                            id_counter = id_counter + 1
-                            master_id_map[id_value] = id_to_replace
-                        
-                        device_set["id"]= id_to_replace
-            
-            # remoteLinks is a list of device-id strings. The old code
-            # tested for the literal "remote_link" (never true), would
-            # KeyError when the key was absent, and read a stale loop
-            # variable from the deviceSet block above.
-            if "remoteLinks" in device_json and device_json["remoteLinks"]:
-                sanitized_links = []
-                for remote_link in device_json["remoteLinks"]:
-                    if remote_link in master_id_map:
-                        id_to_replace = master_id_map[remote_link]
-                    else:
-                        id_to_replace = id_counter
-                        id_counter = id_counter + 1
-                        master_id_map[remote_link] = id_to_replace
-                    sanitized_links.append(id_to_replace)
-                device_json["remoteLinks"] = sanitized_links
-            
-        logger.info(json_resp)
+        # Same anonymiser as the diagnostics download: one place decides what
+        # leaves the house. The old inline sanitiser here left device and room
+        # names, the hub's coordinates and its serial number in the dump.
+        json_resp = anonymise_devices(
+            [d for d in json_resp if isinstance(d, dict)]
+        )
+        logger.info(json.dumps(json_resp, indent=2))
         logger.info("--------------")
 
 

@@ -2,6 +2,8 @@
 
 Instructions to dump JSON from the hub, helping new device addition and debugging existing issues.
 
+> Since 0.4.1 the easier way is **Download diagnostics** on the integration page (see the README). It contains the same anonymised device list, without going through the log.
+
 ### Step 1 - Open Settings and click on the Integrations link
 
 ![](../screenshots/settings-deviceandservices.png)

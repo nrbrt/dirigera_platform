@@ -161,6 +161,16 @@ class ikea_base_device:
             return self.unique_id
         return self._json_data.attributes.custom_name
             
+    async def _fetch_model(self) -> None:
+        """Replace the model with the device as the hub has it now.
+
+        The fetched model replaces the one hub events write to, and it is as
+        old as the hub's answer: an event that arrives while the fetch is on
+        its way is newer. Those are held and applied to the new model once it
+        is in place (or to the old one when the fetch fails)."""
+        with hub_event_listener.hold_state_events(self._hub.websocket_base_url):
+            self._json_data = await self._hass.async_add_executor_job(self._get_by_id_fx, self._json_data.id)
+
     async def async_update(self):
         if self.skip_update:
             logger.debug(f"update skipped for {self.name} as marked to skip...")
@@ -168,7 +178,7 @@ class ikea_base_device:
         
         logger.debug(f"update called {self.name}")
         try:
-            self._json_data = await self._hass.async_add_executor_job(self._get_by_id_fx, self._json_data.id)
+            await self._fetch_model()
         except Exception as ex:
             logger.error("error encountered running update on : {}".format(self.name))
             logger.error(ex)
@@ -209,7 +219,7 @@ class ikea_base_device:
                 return
             try:
                 logger.debug(f"throttled update fetching from hub for {self.name}")
-                self._json_data = await self._hass.async_add_executor_job(self._get_by_id_fx, self._json_data.id)
+                await self._fetch_model()
             except Exception as ex:
                 logger.error("error encountered running update on : {}".format(self.name))
                 logger.error(ex)

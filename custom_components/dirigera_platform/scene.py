@@ -15,6 +15,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN, PLATFORM
+from .hub_writer import writer_for
 from .icons import to_hass_icon, ikea_to_hass_icon
 
 logger = logging.getLogger("custom_components.dirigera_platform")
@@ -62,7 +63,7 @@ class ikea_scene(Scene):
     async def async_activate(self, **kwargs: Any) -> None:
         """Trigger Dirigera Scene."""
         logger.debug("Activating scene '%s' (%s)", self.name, self.unique_id)
-        await self.hass.async_add_executor_job(self._scene.trigger)
+        await writer_for(self._hub).run(self._scene.trigger)
 
     async def async_update(self) -> None:
         """Fetch updated scene definition from Dirigera."""

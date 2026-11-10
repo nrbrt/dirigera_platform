@@ -58,7 +58,7 @@ def _module(name):
     return module
 
 
-command_queue = _module("command_queue")
+hub_writer = _module("hub_writer")
 pc = _module("pending_command")
 
 
@@ -93,7 +93,7 @@ def _load_bulb():
         "HomeAssistantError": Exception,
         "DOMAIN": "dirigera_platform",
         "logger": logging.getLogger(__name__),
-        "queue_for": command_queue.queue_for,
+        "writer_for": hub_writer.writer_for,
         "hub_event_listener": L,
         "registry_entry": hel.registry_entry,
         "to_snake_case": hel.to_snake_case,
@@ -155,12 +155,14 @@ class _Hass:
 def setup(monkeypatch):
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    monkeypatch.setattr(command_queue, "_queues", {})
+    monkeypatch.setattr(hub_writer, "_writers", {})
     # The record has its own clock, so no test has to wait for the window.
     now = [1000.0]
     monkeypatch.setattr(pc, "_now", lambda: now[0])
     hub, hass = _Hub(), _Hass()
     listener = L(hub, hass)
+    writer = hub_writer.HubWriter(hass, hub, min_spacing=0)
+    writer.start(loop.create_task)
 
     def bulb(can_receive=DIMMABLE, **attributes):
         entity = ikea_bulb(hub, SimpleNamespace(
@@ -207,6 +209,8 @@ def setup(monkeypatch):
     yield SimpleNamespace(loop=loop, hub=hub, bulb=bulb, hub_says=hub_says, later=later,
                           run=loop.run_until_complete, in_flight=run_with_patch_on_its_way)
     L.unregister_hub(HUB_KEY)
+    writer.stop()
+    loop.run_until_complete(asyncio.sleep(0))
     loop.close()
 
 

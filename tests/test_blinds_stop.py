@@ -8,7 +8,7 @@ and stop a blind.
 
 What is guarded here:
 
-1. The stop request: right route and payload, run in the executor, refused with
+1. The stop request: right route and payload, sent by the hub's writer, refused with
    a HomeAssistantError when the blind does not list blindsState in canReceive.
 2. The STOP feature: advertised only for blinds that can actually be stopped.
 3. The state after a stop. Push events only refresh blindsCurrentLevel, so a
@@ -73,6 +73,13 @@ class _StubDevice:
         return "Test blind"
 
 
+class _Writer:
+    """Stands in for the hub's writer (test_hub_writer.py): runs it at once."""
+
+    async def run(self, func, *args):
+        return func(*args)
+
+
 class _StubSensor:
     def __init__(self, device, **kwargs):
         self._device = device
@@ -96,6 +103,7 @@ def _load_classes():
         "ikea_base_device": _StubDevice,
         "ikea_base_device_sensor": _StubSensor,
         "logger": SimpleNamespace(debug=lambda *a, **k: None),
+        "writer_for": lambda hub: _Writer(),
     }
     module = ast.Module(body=nodes, type_ignores=[])
     exec(compile(ast.fix_missing_locations(module), BASE_CLASSES, "exec"), namespace)

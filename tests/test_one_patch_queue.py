@@ -4,12 +4,12 @@
 guaifi measured that three separate PATCHes per light, sent in parallel for
 every light of an area, often left bulbs on the wrong level or colour
 temperature. One PATCH per light holding a list with one attribute per item,
-sent through a per-hub queue, left none wrong. Tekno74 found that isOn and
+sent through the hub's writer (test_hub_writer.py), left none wrong. Tekno74 found that isOn and
 lightLevel in ONE item come back 202 with lightLevel dropped, so the items
 must stay separate.
 
 As in the other light tests, the code is lifted out of light.py with ast, so
-it runs without importing homeassistant. command_queue.py has no Home
+it runs without importing homeassistant. hub_writer.py has no Home
 Assistant imports and is loaded directly.
 """
 import ast
@@ -17,7 +17,6 @@ import asyncio
 import importlib.util
 import logging
 import os
-import time
 from types import SimpleNamespace
 
 import pytest
@@ -35,7 +34,7 @@ def _module(name):
     return module
 
 
-command_queue = _module("command_queue")
+hub_writer = _module("hub_writer")
 pending_command = _module("pending_command")
 
 
@@ -60,7 +59,7 @@ def _load():
         "HomeAssistantError": Exception,
         "DOMAIN": "dirigera_platform",
         "logger": logging.getLogger(__name__),
-        "queue_for": command_queue.queue_for,
+        "writer_for": hub_writer.writer_for,
     }
     exec(compile(ast.fix_missing_locations(ast.Module(body=funcs + methods, type_ignores=[])), LIGHT, "exec"), ns)
     return ns
@@ -175,7 +174,7 @@ def test_a_level_never_goes_out_without_is_on():
 # --- ikea_bulb.async_turn_on / async_turn_off --------------------------------
 
 class _Hub:
-    websocket_base_url = None
+    websocket_base_url = "wss://test"
 
     def __init__(self):
         self.sent = []
@@ -203,12 +202,23 @@ def _bulb(hub):
     return bulb
 
 
-def test_turn_on_sends_one_patch_and_updates_the_model(monkeypatch):
-    monkeypatch.setattr(command_queue, "_queues", {})
+def _run(hub, command):
+    """Run the bulb's command with the hub's writer at work."""
+    async def main():
+        writer = hub_writer.HubWriter(_Hass(), hub, min_spacing=0)
+        writer.start()
+        try:
+            await command
+        finally:
+            writer.stop()
+
+    asyncio.run(main())
+
+
+def test_turn_on_sends_one_patch_and_updates_the_model():
     hub = _Hub()
-    hub.websocket_base_url = "wss://test-1"
     bulb = _bulb(hub)
-    asyncio.run(NS["async_turn_on"](bulb, brightness=115, hs_color=(120.0, 80.0)))
+    _run(hub, NS["async_turn_on"](bulb, brightness=115, hs_color=(120.0, 80.0)))
     assert hub.sent == [("/devices/bulb-1", [
         {"attributes": {"isOn": True}},
         {"attributes": {"colorHue": 120.0, "colorSaturation": 0.8}},
@@ -222,71 +232,18 @@ def test_turn_on_sends_one_patch_and_updates_the_model(monkeypatch):
     assert bulb._pending.holds_back("light_level", 10) is True
 
 
-def test_plain_turn_on(monkeypatch):
-    monkeypatch.setattr(command_queue, "_queues", {})
+def test_plain_turn_on():
     hub = _Hub()
-    hub.websocket_base_url = "wss://test-2"
     bulb = _bulb(hub)
-    asyncio.run(NS["async_turn_on"](bulb))
+    _run(hub, NS["async_turn_on"](bulb))
     assert hub.sent == [("/devices/bulb-1", [{"attributes": {"isOn": True}}])]
     assert bulb._json_data.attributes.is_on is True
 
 
-def test_turn_off(monkeypatch):
-    monkeypatch.setattr(command_queue, "_queues", {})
+def test_turn_off():
     hub = _Hub()
-    hub.websocket_base_url = "wss://test-3"
     bulb = _bulb(hub)
     bulb._json_data.attributes.is_on = True
-    asyncio.run(NS["async_turn_off"](bulb))
+    _run(hub, NS["async_turn_off"](bulb))
     assert hub.sent == [("/devices/bulb-1", [{"attributes": {"isOn": False}}])]
     assert bulb._json_data.attributes.is_on is False
-
-
-# --- the queue ----------------------------------------------------------------
-
-class _ThreadHass:
-    async def async_add_executor_job(self, fn, *args):
-        return await asyncio.get_running_loop().run_in_executor(None, fn, *args)
-
-
-def test_queue_runs_one_command_at_a_time_and_spaces_them():
-    spacing = 0.05
-    log = []
-
-    def command(name):
-        log.append(("start", name, time.monotonic()))
-        time.sleep(0.01)
-        log.append(("end", name, time.monotonic()))
-        return name
-
-    async def main():
-        queue = command_queue.HubCommandQueue(min_spacing=spacing)
-        return await asyncio.gather(*(queue.run(_ThreadHass(), command, n) for n in range(5)))
-
-    assert asyncio.run(main()) == list(range(5))
-    kinds = [k for k, _, _ in log]
-    assert kinds == ["start", "end"] * 5, "commands overlapped"
-    starts = [t for k, _, t in log if k == "start"]
-    assert all(b - a >= spacing * 0.95 for a, b in zip(starts, starts[1:]))
-
-
-def test_queue_survives_a_failing_command():
-    def boom():
-        raise RuntimeError("hub said no")
-
-    async def main():
-        queue = command_queue.HubCommandQueue(min_spacing=0)
-        with pytest.raises(RuntimeError):
-            await queue.run(_Hass(), boom)
-        return await queue.run(_Hass(), lambda: "next")
-
-    assert asyncio.run(main()) == "next"
-
-
-def test_one_queue_per_hub(monkeypatch):
-    monkeypatch.setattr(command_queue, "_queues", {})
-    a = SimpleNamespace(websocket_base_url="wss://a")
-    b = SimpleNamespace(websocket_base_url="wss://b")
-    assert command_queue.queue_for(a) is command_queue.queue_for(SimpleNamespace(websocket_base_url="wss://a"))
-    assert command_queue.queue_for(a) is not command_queue.queue_for(b)

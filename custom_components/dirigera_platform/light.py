@@ -22,7 +22,7 @@ from homeassistant.helpers.entity import DeviceInfo
 from .const import DOMAIN, CONF_HIDE_DEVICE_SET_BULBS, PLATFORM, DISCOVERY_COORDINATOR
 from .hub_event_listener import hub_event_listener, registry_entry, to_snake_case
 from .device_discovery import get_discovery_coordinator
-from .command_queue import queue_for
+from .hub_writer import writer_for
 from .pending_command import PendingCommand
 
 logger = logging.getLogger("custom_components.dirigera_platform")
@@ -417,15 +417,13 @@ class ikea_bulb(LightEntity):
             raise HomeAssistantError(ex, DOMAIN, "hub_exception")
         
     async def _send(self, data, updates):
-        """PATCH this light through the hub's queue; `updates` are the model
+        """PATCH this light through the hub's writer; `updates` are the model
         values the PATCH stands for."""
         # Recorded before the PATCH goes out: the hub's echo can be here
         # before the PATCH call returns.
         command = self._pending.begin(updates)
         try:
-            await queue_for(self._hub).run(
-                self.hass, self._hub.patch, f"/devices/{self._json_data.id}", data
-            )
+            await writer_for(self._hub).patch_device(self._json_data.id, data)
         except BaseException:  # a cancelled call too
             self._pending.failed(command)
             raise
@@ -438,7 +436,7 @@ class ikea_bulb(LightEntity):
         logger.debug(kwargs)
 
         try:
-            # One PATCH per light, through the hub's queue (#71). Three
+            # One PATCH per light, through the hub's writer (#71). Three
             # separate PATCHes per light, sent in parallel for every light of
             # an area, often left bulbs on the wrong level or temperature.
             data, updates = light_turn_on_patch(
@@ -560,7 +558,7 @@ class ikea_bulb_device_set(LightEntity):
         # (#71) bulbs ended on the wrong level or temperature, or stayed off,
         # whatever the body looked like, and one member ignored every set
         # command while it worked on its own. So a set sends each member its
-        # own command, through the same per-light PATCH and per-hub queue as
+        # own command, through the same per-light PATCH and per-hub writer as
         # a single bulb. Every member is tried; a failure is raised after.
         # Members are read at startup, as the set's first bulb always was.
         lights = self._device_set.get_lights()

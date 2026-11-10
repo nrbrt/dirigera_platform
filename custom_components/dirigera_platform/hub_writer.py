@@ -9,8 +9,8 @@ previous one started, none were wrong.
 
 Every command to a hub, of every kind of device, is handed to the hub's
 HubWriter. Its worker task takes them in the order they were asked for and
-runs each in the executor. The worker belongs to the config entry, not to
-whoever asked:
+runs each in the executor. The worker belongs to the config entry (see
+start_hub_writer), not to whoever asked:
 
 * A caller that is cancelled (a script in mode: restart) stops waiting. A
   command that is already with the hub is finished, and the next one starts
@@ -61,8 +61,8 @@ class HubWriter:
     # -- lifetime ---------------------------------------------------------------
 
     def start(self, create_task=None):
-        """Start the worker. `create_task` makes the task from the coroutine;
-        the config entry passes its async_create_background_task."""
+        """Start the worker. `create_task` makes the task from the coroutine
+        (see start_hub_writer)."""
         _writers.setdefault(self._key, []).append(self)
         self._task = (create_task or asyncio.ensure_future)(self._work())
 
@@ -134,6 +134,28 @@ class HubWriter:
         finally:
             # Cancelled by stop() or by the config entry that owns the task.
             self._close()
+
+
+def start_hub_writer(hass, entry, hub) -> HubWriter:
+    """Start the writer of a config entry's hub. Its worker lives exactly as
+    long as the entry: it ends when the entry is unloaded or its setup fails
+    (async_on_unload runs for both).
+
+    The worker is a plain task of the loop, not one of Home Assistant's:
+
+    * a background task (hass or entry async_create_background_task) is
+      cancelled in async_stop before EVENT_HOMEASSISTANT_STOP is fired, so an
+      automation that runs at shutdown would find no writer;
+    * a tracked task (async_create_task) never ends here, and
+      async_block_till_done waits for those.
+
+    Home Assistant does not unload entries when it stops. The worker is then
+    cancelled with everything else that is left on the loop, by the runner
+    (runner.py, _cancel_all_tasks_with_timeout). Read in HA 2026.11.1."""
+    writer = HubWriter(hass, hub)
+    writer.start(lambda work: hass.loop.create_task(work, name="dirigera_platform hub writer"))
+    entry.async_on_unload(writer.stop)
+    return writer
 
 
 def _fail(future, error):

@@ -521,3 +521,107 @@ def test_light_is_patched_by_device_id_on_the_writers_own_hub():
 
     asyncio.run(main())
     assert hub.sent() == [("PATCH", "/devices/bulb-9", [{"attributes": {"isOn": True}}])]
+
+
+# --- the worker lives as long as the config entry -------------------------------
+#
+# Home Assistant cancels every background task before it fires
+# EVENT_HOMEASSISTANT_STOP (core.py async_stop, "Cancel all background tasks"),
+# and a config entry's async_create_background_task is such a task. The writer
+# was one, so an automation that runs at shutdown ("lights off when Home
+# Assistant stops") found the hub's writer gone.
+
+class _HomeAssistant:
+    """The task bookkeeping of homeassistant.core that matters here."""
+
+    def __init__(self):
+        self.loop = asyncio.get_running_loop()
+        self._background_tasks = set()
+
+    async def async_add_executor_job(self, fn, *args):
+        return await self.loop.run_in_executor(None, fn, *args)
+
+    def async_create_background_task(self, target, name, eager_start=True):
+        task = self.loop.create_task(target, name=name)
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.remove)
+        return task
+
+    async def stop_until_the_stop_event(self):
+        """async_stop up to where EVENT_HOMEASSISTANT_STOP is fired."""
+        for task in list(self._background_tasks):
+            task.cancel("Home Assistant is stopping")
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+
+class _Entry:
+    def __init__(self, hass):
+        self._hass = hass
+        self._on_unload = []
+
+    def async_create_background_task(self, hass, target, name, eager_start=True):
+        return hass.async_create_background_task(target, name, eager_start)
+
+    def async_on_unload(self, func):
+        self._on_unload.append(func)
+
+    def unload(self):
+        while self._on_unload:
+            self._on_unload.pop()()
+
+
+def test_writer_still_sends_when_home_assistant_is_stopping():
+    hub = _Hub()
+
+    async def main():
+        hass = _HomeAssistant()
+        entry = _Entry(hass)
+        writer = hub_writer.start_hub_writer(hass, entry, hub)
+        try:
+            await asyncio.sleep(0)  # Home Assistant has been running
+            await hass.stop_until_the_stop_event()
+            # What a shutdown automation does.
+            await asyncio.wait_for(hub_writer.writer_for(hub).run(hub.request, "lights off"), 2)
+        finally:
+            entry.unload()
+        await asyncio.sleep(0)
+        return writer
+
+    writer = asyncio.run(main())
+    assert hub.sent() == ["lights off"]
+    assert writer._task.done(), "unloading the entry ends the worker"
+
+
+def test_unloading_the_entry_ends_the_worker():
+    hub = _Hub()
+
+    async def main():
+        hass = _HomeAssistant()
+        entry = _Entry(hass)
+        writer = hub_writer.start_hub_writer(hass, entry, hub)
+        entry.unload()
+        await asyncio.sleep(0)
+        assert writer._task.done()
+        with pytest.raises(hub_writer.HubWriterStopped):
+            hub_writer.writer_for(hub)
+
+    asyncio.run(main())
+
+
+def test_process_shutdown_ends_a_worker_whose_entry_was_never_unloaded():
+    # Home Assistant does not unload entries when it stops. What is left is
+    # cancelled by the runner (runner.py _cancel_all_tasks_with_timeout, which
+    # is asyncio.all_tasks): the worker must be a task of the loop.
+    hub = _Hub()
+
+    async def main():
+        hass = _HomeAssistant()
+        writer = hub_writer.start_hub_writer(hass, _Entry(hass), hub)
+        await asyncio.sleep(0)
+        assert writer._task in asyncio.all_tasks()
+        return writer
+
+    writer = asyncio.run(main())  # asyncio.run cancels all tasks, as the runner does
+    assert writer._task.cancelled()
+    assert writer._stopped

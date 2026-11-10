@@ -31,7 +31,7 @@ from .const import (
     DISCOVERY_COORDINATOR,
 )
 from .hub_event_listener import hub_event_listener
-from .hub_writer import HubWriter
+from .hub_writer import start_hub_writer
 from .stale_devices import async_remove_stale_devices, is_stale, known_identifiers
 from .device_discovery import DeviceDiscoveryCoordinator, set_discovery_coordinator
 
@@ -319,12 +319,8 @@ async def async_setup_entry(
     )
 
     # The one write path to this hub (hub_writer.py). Its worker lives as long
-    # as the entry: Home Assistant cancels the task on unload and when setup
-    # fails, stop() fails what was still waiting.
-    writer = HubWriter(hass, hub)
-    writer.start(lambda work: entry.async_create_background_task(
-        hass, work, "dirigera_platform hub writer"))
-    entry.async_on_unload(writer.stop)
+    # as the entry, through Home Assistant's shutdown too.
+    start_hub_writer(hass, entry, hub)
 
     # Lets get all kinds that we are interested in one go and create the devices
     # such that the platform can go ahead and add the associated sensors

@@ -160,20 +160,23 @@ def hub_value(attribute, value):
     The hub keeps colour values in the bulb's own units, so what it reports
     after a PATCH is not what was sent (measured on a live hub, 10-11-2026):
 
-    * colour temperature in whole mireds: 2700 K comes back as 2702, 2900 as 2898;
-    * hue in 1/65536 of the circle: 30 comes back as 29.9981689453125;
-    * saturation in 1/254: 0.5 stays 0.5 (127/254), 0.634 becomes 161/254.
+    * colour temperature in whole mireds, rounded DOWN: 2700 K comes back as
+      2702 (370.4 -> 370 mireds), 2900 as 2906 (344.8 -> 344), 3200 as 3205;
+    * hue in 1/65536 of the circle, rounded to NEAREST: 30 comes back as
+      29.9981689453125, 30.0035 as 30.003662109375;
+    * saturation in 1/254, rounded DOWN: 0.5 stays 0.5, 0.5039 (127.99/254)
+      becomes 0.5, 0.998 becomes 253/254.
 
     This is the one place that knows; the record of a pending command and the
     value the model assumes both come from here, so the hub's echo matches and
     the model never holds a value the hub does not have. Everything else
     (isOn, lightLevel, colorMode) is stored as sent."""
     if attribute == "color_temperature":
-        return int(1_000_000 / round(1_000_000 / value))
+        return int(1_000_000 / int(1_000_000 / value))
     if attribute == "color_hue":
         return round(value * 65536 / 360) * 360 / 65536
     if attribute == "color_saturation":
-        return round(value * 254) / 254
+        return int(value * 254) / 254
     return value
 
 

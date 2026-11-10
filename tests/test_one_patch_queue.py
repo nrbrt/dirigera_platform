@@ -136,14 +136,19 @@ def test_what_the_bulb_cannot_receive_is_left_out():
     ("color_hue", 30.2288818359375, 30.2288818359375),   # 5503/65536 of the circle
     ("color_saturation", 0.5, 0.5),
     ("color_saturation", 0.6338582677165354, 0.6338582677165354),  # 161/254
-    ("color_saturation", 0.634, 0.6338582677165354),
+    ("color_temperature", 2900, 2906),   # 344.8 mireds, rounded down
+    ("color_temperature", 3200, 3205),   # 312.5 mireds, rounded down
+    ("color_hue", 30.0035, 30.003662109375),   # 5461.97/65536, rounded to nearest
+    ("color_hue", 120.004, 120.003662109375),
+    ("color_saturation", 0.5039, 0.5),   # 127.99/254, rounded down
+    ("color_saturation", 0.998, 0.9960629921259843),
 ])
 def test_hub_value_is_what_the_hub_reported(attribute, sent, reported):
     assert hub_value(attribute, sent) == reported
 
 
 def test_hub_value_follows_the_mired_rule():
-    assert hub_value("color_temperature", 2900) == 2898  # 345 mireds
+    assert hub_value("color_temperature", 2900) == 2906  # 344 mireds, not 345
 
 
 def test_hub_value_leaves_the_rest_as_sent():

@@ -107,3 +107,111 @@ def test_int_and_float_of_the_same_value_match(clock):
     pending.accepted(pending.begin({"color_hue": 120.0}))
     assert pending.holds_back("color_hue", 120) is False
     assert not pending
+
+
+# --- the hub's last value wins when the command is not confirmed ----------------
+#
+# A differing value inside the window used to be dropped. Dimmed with a remote
+# one second after a command from Home Assistant, and with no later event, the
+# light kept the value Home Assistant had sent (review of 10-11-2026).
+
+class _Timers:
+    """Stands in for loop.call_later."""
+
+    def __init__(self):
+        self.armed = []
+
+    def call_later(self, delay, fn, *args):
+        handle = type("Handle", (), {"cancelled": False, "delay": delay})()
+        handle.cancel = lambda: setattr(handle, "cancelled", True)
+        handle.fire = lambda: fn(*args)
+        self.armed.append(handle)
+        return handle
+
+
+@pytest.fixture
+def timed(clock):
+    timers, stood = _Timers(), []
+    return pc.PendingCommand(timers.call_later, stood.append), timers, stood
+
+
+def test_window_is_a_timer_from_the_moment_the_hub_accepted(timed):
+    pending, timers, _ = timed
+    command = pending.begin({"light_level": 80})
+    assert timers.armed == [], "no window before the hub has answered"
+    pending.accepted(command)
+    assert [t.delay for t in timers.armed] == [pc.ECHO_WINDOW_S]
+
+
+def test_last_differing_value_stands_when_the_window_ends(timed):
+    pending, timers, stood = timed
+    pending.accepted(pending.begin({"is_on": True, "light_level": 80}))
+    assert pending.holds_back("light_level", 30) is True
+    assert pending.holds_back("light_level", 20) is True  # the remote, again
+    timers.armed[0].fire()
+    assert stood == [{"light_level": 20}], "is_on was never reported, nothing to apply"
+    assert not pending
+
+
+def test_window_without_a_differing_value_ends_silently(timed):
+    pending, timers, stood = timed
+    pending.accepted(pending.begin({"light_level": 80}))
+    timers.armed[0].fire()
+    assert stood == []
+    assert not pending
+
+
+def test_confirmation_forgets_what_was_kept_and_cancels_the_timer(timed):
+    pending, timers, stood = timed
+    pending.accepted(pending.begin({"light_level": 80}))
+    pending.holds_back("light_level", 30)  # the stale echo
+    assert pending.holds_back("light_level", 80) is False  # the confirmation
+    assert timers.armed[0].cancelled, "the record is clear, the timer must go"
+    assert stood == []
+
+
+def test_timer_stays_while_another_attribute_of_the_command_is_pending(timed):
+    pending, timers, stood = timed
+    pending.accepted(pending.begin({"is_on": True, "light_level": 80}))
+    pending.holds_back("light_level", 80)
+    assert not timers.armed[0].cancelled
+    pending.holds_back("is_on", False)
+    timers.armed[0].fire()
+    assert stood == [{"is_on": False}]
+
+
+def test_failed_command_returns_what_the_hub_reported_meanwhile(timed):
+    pending, timers, stood = timed
+    command = pending.begin({"is_on": True, "light_level": 80})
+    pending.holds_back("light_level", 30)
+    assert pending.failed(command) == {"light_level": 30}
+    assert not pending and stood == []
+
+
+def test_newer_command_forgets_what_was_kept_for_the_older_one(timed):
+    pending, timers, stood = timed
+    pending.accepted(pending.begin({"light_level": 50}))
+    pending.holds_back("light_level", 30)
+    second = pending.begin({"light_level": 80})
+    assert timers.armed[0].cancelled, "nothing of the first command is pending"
+    pending.accepted(second)
+    timers.armed[1].fire()
+    assert stood == [], "30 was reported before the second command went out"
+
+
+def test_window_of_an_older_command_leaves_the_newer_one_alone(timed):
+    pending, timers, stood = timed
+    pending.accepted(pending.begin({"is_on": True, "light_level": 50}))
+    pending.begin({"light_level": 80})
+    pending.holds_back("light_level", 50)
+    timers.armed[0].fire()  # the first window: is_on only
+    assert stood == []
+    assert pending.holds_back("light_level", 30) is True
+
+
+def test_clear_cancels_every_timer(timed):
+    pending, timers, stood = timed
+    pending.accepted(pending.begin({"light_level": 80}))
+    pending.holds_back("light_level", 30)
+    pending.clear()
+    assert timers.armed[0].cancelled and not pending and stood == []

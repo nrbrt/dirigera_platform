@@ -160,6 +160,7 @@ def setup(monkeypatch):
     now = [1000.0]
     monkeypatch.setattr(pc, "_now", lambda: now[0])
     hub, hass = _Hub(), _Hass()
+    hass.loop = loop  # the end of a command's window is a timer on it
     listener = L(hub, hass)
     writer = hub_writer.HubWriter(hass, hub, min_spacing=0)
     writer.start(loop.create_task)
@@ -206,7 +207,7 @@ def setup(monkeypatch):
 
         loop.run_until_complete(scenario())
 
-    yield SimpleNamespace(loop=loop, hub=hub, bulb=bulb, hub_says=hub_says, later=later,
+    yield SimpleNamespace(loop=loop, hub=hub, bulb=bulb, hub_says=hub_says, later=later, says=says,
                           run=loop.run_until_complete, in_flight=run_with_patch_on_its_way)
     L.unregister_hub(HUB_KEY)
     writer.stop()
@@ -315,6 +316,82 @@ def test_change_after_an_early_echo_is_not_undone_when_the_patch_returns(setup):
     setup.in_flight(bulb.async_turn_on(brightness=204),
                     during=[{"isOn": True, "lightLevel": 80}, {"lightLevel": 10}])
     assert _level(bulb) == 10, "the confirmed value was written again over a newer one"
+
+
+# --- the hub's last value wins when the command is not confirmed ----------------
+
+@pytest.fixture
+def short_window(monkeypatch):
+    # The window is a timer on the loop; these tests sit it out for real.
+    monkeypatch.setattr(pc, "ECHO_WINDOW_S", 0.05)
+    monkeypatch.setattr(pc, "_now", pc.time.monotonic)
+
+
+def test_dimmed_with_a_remote_right_after_a_command_and_no_later_event(setup, short_window):
+    bulb = setup.bulb(light_level=30)
+    setup.run(bulb.async_turn_on(brightness=204))
+    setup.hub_says(isOn=True, lightLevel=80)  # the echo
+    setup.run(bulb.async_turn_on(brightness=128))
+    setup.hub_says(lightLevel=20)  # the remote, inside the window: no echo of 50 follows
+    assert _level(bulb) == 50, "inside the window it may still be an old value"
+    before = bulb.writes
+    setup.run(asyncio.sleep(0.1))
+    assert _level(bulb) == 20, "Home Assistant kept the value it sent, the light is at 20"
+    assert bulb.writes == before + 1, "the late value never reached Home Assistant"
+    setup.hub_says(lightLevel=10)  # nothing is pending any more
+    assert _level(bulb) == 10
+
+
+def test_stale_echo_followed_by_the_confirmation_is_never_applied(setup, short_window):
+    bulb = setup.bulb(light_level=30)
+    setup.run(bulb.async_turn_on(brightness=204))
+    setup.hub_says(lightLevel=30)  # the old level first
+    setup.hub_says(lightLevel=80)  # the confirmation
+    before = bulb.writes
+    setup.run(asyncio.sleep(0.1))
+    assert _level(bulb) == 80
+    assert bulb.writes == before, "the window of a confirmed command wrote state"
+
+
+def test_value_reported_during_a_failed_patch_is_the_state(setup):
+    bulb = setup.bulb(light_level=30)
+    setup.hub.fail = True
+    with pytest.raises(Exception):
+        setup.in_flight(bulb.async_turn_on(brightness=204), during=[{"lightLevel": 55}])
+    assert _level(bulb) == 55, "the command failed, the hub's value was dropped"
+
+
+def test_value_reported_while_the_command_waits_its_turn_is_applied(setup):
+    # The record starts when the PATCH goes out. Until then the hub's value
+    # is the state of the light, and a slow queue does not keep it back.
+    bulb = setup.bulb(light_level=30)
+    other = SimpleNamespace(gate=threading.Event())
+
+    async def scenario():
+        writer = hub_writer.writer_for(setup.hub)
+        ahead = asyncio.ensure_future(writer.run(other.gate.wait, 5))
+        await asyncio.sleep(0.02)
+        command = asyncio.ensure_future(bulb.async_turn_on(brightness=204))
+        await asyncio.sleep(0.02)
+        setup.says(lightLevel=20)
+        await asyncio.sleep(0)
+        level_while_waiting = _level(bulb)
+        other.gate.set()
+        await asyncio.gather(ahead, command)
+        return level_while_waiting
+
+    assert setup.run(scenario()) == 20
+    assert _level(bulb) == 80
+
+
+def test_removed_bulb_has_no_window_left(setup, short_window):
+    bulb = setup.bulb(light_level=30)
+    setup.run(bulb.async_turn_on(brightness=204))
+    setup.hub_says(lightLevel=20)
+    setup.run(bulb.async_will_remove_from_hass())
+    bulb.hass = None
+    setup.run(asyncio.sleep(0.1))
+    assert _level(bulb) == 80
 
 
 # --- what is sent is what must come back ---------------------------------------

@@ -87,26 +87,30 @@ class HubWriter:
 
     # -- commands ---------------------------------------------------------------
 
-    async def run(self, fn, *args):
+    async def run(self, fn, *args, started=None):
         """Run the blocking fn(*args) in the executor, after every command
-        asked before it, and return what it returns."""
+        asked before it, and return what it returns.
+
+        `started` is called on the event loop when the command's turn has
+        come, right before it goes to the hub; not at all for a command that
+        is never sent."""
         if self._stopped:
             raise HubWriterStopped(f"the integration for hub {self._key} is not loaded")
         future = asyncio.get_running_loop().create_future()
-        self._queue.put_nowait((fn, args, future))
+        self._queue.put_nowait((fn, args, started, future))
         # Cancelling the caller cancels this future, never the worker.
         return await future
 
-    async def patch_device(self, device_id, data):
+    async def patch_device(self, device_id, data, started=None):
         """PATCH /devices/{device_id}; `data` is the list of attribute items."""
-        return await self.run(self._hub.patch, f"/devices/{device_id}", data)
+        return await self.run(self._hub.patch, f"/devices/{device_id}", data, started=started)
 
     # -- the worker -------------------------------------------------------------
 
     async def _work(self):
         try:
             while True:
-                fn, args, future = await self._queue.get()
+                fn, args, started, future = await self._queue.get()
                 self._current = future  # out of the queue: stop() must find it
                 if self._last_start is not None and not future.done():
                     wait = self._last_start + self._min_spacing - time.monotonic()
@@ -116,6 +120,8 @@ class HubWriter:
                     continue
                 self._last_start = time.monotonic()
                 try:
+                    if started is not None:
+                        started()
                     result = await self._hass.async_add_executor_job(fn, *args)
                 except Exception as error:  # pylint: disable=broad-except
                     _fail(future, error)

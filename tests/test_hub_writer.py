@@ -486,6 +486,29 @@ def test_every_device_kind_writes_through_the_one_worker_of_its_hub():
     ]
 
 
+def test_started_is_called_when_the_command_goes_out_not_when_it_is_asked():
+    hub = _Hub()
+    hub.gate = threading.Event()
+    order = []
+
+    async def main():
+        writer = _writer(hub)
+        try:
+            first = asyncio.ensure_future(writer.run(hub.request, "a", started=lambda: order.append("a out")))
+            second = asyncio.ensure_future(writer.run(hub.request, "b", started=lambda: order.append("b out")))
+            never = asyncio.ensure_future(writer.run(hub.request, "c", started=lambda: order.append("c out")))
+            await asyncio.sleep(0.05)
+            order.append("a with the hub")
+            never.cancel()
+            hub.gate.set()
+            await asyncio.gather(first, second)
+        finally:
+            writer.stop()
+
+    asyncio.run(main())
+    assert order == ["a out", "a with the hub", "b out"]
+
+
 def test_light_is_patched_by_device_id_on_the_writers_own_hub():
     hub = _Hub()
 

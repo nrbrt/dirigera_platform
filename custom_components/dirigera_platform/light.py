@@ -237,7 +237,7 @@ class ikea_bulb(LightEntity):
         self._hub = hub
         self._json_data = json_data
         # What this bulb was last told and the hub has not confirmed yet.
-        self._pending = PendingCommand()
+        self._pending = PendingCommand(self._call_later, self._hub_values_stand)
 
         # Register the device for updates
         hub_event_listener.register(self._hub.websocket_base_url, self._json_data.id, registry_entry(self))
@@ -281,7 +281,9 @@ class ikea_bulb(LightEntity):
             elif "colorTemperature" in attributes:
                 attributes = {**attributes, "colorMode": "temperature"}
         # A value that differs from what this bulb was just told is the hub's
-        # old or intermediate state (see pending_command.py).
+        # old or intermediate state, or a change made right after the command.
+        # It is kept, and applied by _hub_values_stand when the hub does not
+        # confirm the command (see pending_command.py).
         return {
             key: value for key, value in attributes.items()
             if not self._pending.holds_back(to_snake_case(key), value)
@@ -416,16 +418,41 @@ class ikea_bulb(LightEntity):
             logger.error(ex)
             raise HomeAssistantError(ex, DOMAIN, "hub_exception")
         
+    def _call_later(self, delay, fn, *args):
+        return self.hass.loop.call_later(delay, fn, *args)
+
+    def _hub_values_stand(self, values):
+        """`values` (model attribute -> value) were reported by the hub while
+        a command for them was pending, and the command was not confirmed or
+        failed: they are the state of the light."""
+        if not values:
+            return
+        for key, value in values.items():
+            setattr(self._json_data.attributes, key, value)
+        if self.hass is not None:
+            self.async_schedule_update_ha_state(False)
+
+    async def async_will_remove_from_hass(self):
+        self._pending.clear()
+
     async def _send(self, data, updates):
         """PATCH this light through the hub's writer; `updates` are the model
         values the PATCH stands for."""
-        # Recorded before the PATCH goes out: the hub's echo can be here
-        # before the PATCH call returns.
-        command = self._pending.begin(updates)
+        command = None
+
+        def started():
+            # Recorded when the PATCH goes out, not when it joined the queue
+            # (what the hub says until then is the light's state before the
+            # command), and not later: the hub's echo can be here before the
+            # PATCH call returns.
+            nonlocal command
+            command = self._pending.begin(updates)
+
         try:
-            await writer_for(self._hub).patch_device(self._json_data.id, data)
+            await writer_for(self._hub).patch_device(self._json_data.id, data, started=started)
         except BaseException:  # a cancelled call too
-            self._pending.failed(command)
+            if command is not None:
+                self._hub_values_stand(self._pending.failed(command))
             raise
         for key, value in self._pending.accepted(command).items():
             setattr(self._json_data.attributes, key, value)

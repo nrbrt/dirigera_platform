@@ -12,7 +12,6 @@ import datetime
 from dateutil import parser
 from pydantic import TypeAdapter
 from dirigera import Hub
-from dirigera.devices.device import Room
 
 from homeassistant.const import ATTR_ENTITY_ID
 from homeassistant.helpers import device_registry as dr, entity_registry as er, area_registry as ar
@@ -191,6 +190,36 @@ def _hold_back_energy_decrease(entity, key_attr, value_to_set) -> bool:
     )
     return True
 
+def _write_fields(entity, model, values, held_back=None):
+    """Write every hub value the model has a field for, as the type of that
+    field. held_back(key, key_attr, value) may keep one value out. Returns the
+    hub keys that were written."""
+    device_id = entity._json_data.id
+    applied = set()
+    for key, raw in values.items():
+        key_attr = to_snake_case(key)
+        try:
+            value = _field_value(model, key_attr, raw)
+            if value is _NO_FIELD:
+                logger.debug(f"{key} is not on the model of {device_id}, ignoring")
+                continue
+            if held_back is not None and held_back(key, key_attr, value):
+                continue
+            setattr(model, key_attr, value)
+            applied.add(key)
+        except ValueError as ex:
+            # Once per device and field, or a value shape the hub keeps
+            # sending would log on every event.
+            warn_key = (device_id, key_attr)
+            if warn_key not in _misfit_warned:
+                _misfit_warned.add(warn_key)
+                logger.warning(f"Keeping the old {key_attr} of {device_id}, the hub sent {raw!r} which does not fit the model: {ex}")
+        except Exception as ex:
+            # One bad value must not drop the rest of the event.
+            logger.warning(f"Failed to set {key} on {device_id}: {ex}")
+    return applied
+
+
 def _apply_attributes(entity, attributes, own_device=True):
     """Write every hub attribute the entity's model has a field for.
 
@@ -208,34 +237,65 @@ def _apply_attributes(entity, attributes, own_device=True):
     own_view = getattr(entity, "hub_attributes", None)
     if own_view is not None:
         attributes = own_view(attributes)
+    if not own_device:
+        attributes = {key: raw for key, raw in attributes.items()
+                      if key != "customName" and raw is not None}
     # Read before anything is written (see #45).
     energy_reset_advanced = _energy_reset_advanced(entity, attributes)
-    applied = set()
-    for key, raw in attributes.items():
-        if not own_device and (key == "customName" or raw is None):
-            continue
-        key_attr = to_snake_case(key)
-        try:
-            value = _field_value(model, key_attr, raw)
-            if value is _NO_FIELD:
-                logger.debug(f"attribute {key} is not on the model of {entity._json_data.id}, ignoring")
-                continue
-            if key in ENERGY_TOTAL_ATTRS and not energy_reset_advanced:
-                if _hold_back_energy_decrease(entity, key_attr, value):
-                    continue
-            setattr(model, key_attr, value)
-            applied.add(key)
-        except ValueError as ex:
-            # Once per device and field, or a value shape the hub keeps
-            # sending would log on every event.
-            warn_key = (entity._json_data.id, key_attr)
-            if warn_key not in _misfit_warned:
-                _misfit_warned.add(warn_key)
-                logger.warning(f"Keeping the old {key_attr} of {entity._json_data.id}, the hub sent {raw!r} which does not fit the model: {ex}")
-        except Exception as ex:
-            # One bad attribute must not drop the rest of the event.
-            logger.warning(f"Failed to set {key} on {entity._json_data.id}: {ex}")
-    return applied
+
+    def held_back(key, key_attr, value):
+        return (key in ENERGY_TOTAL_ATTRS and not energy_reset_advanced
+                and _hold_back_energy_decrease(entity, key_attr, value))
+
+    return _write_fields(entity, model, attributes, held_back)
+
+
+# --- The device's own fields ---------------------------------------------------
+#
+# Next to `attributes` an event carries fields of the device itself:
+# isReachable, room, lastSeen, isHidden, and the resync replays whole devices.
+# They go through the device model the same way: a field is applied when the
+# model has it, with that field's validation (a room becomes the model's Room).
+#
+# Two keys are not state of the device for this path: `attributes` is partial
+# in an event and is applied field by field above, and `deviceSet` is not
+# applied from events at all.
+DEVICE_KEYS_WITH_THEIR_OWN_PATH = frozenset({"attributes", "deviceSet"})
+
+# What the parts of a split device have in common. The hub keeps the room on
+# one part only, and a part that drops off the network takes the others along.
+# Everything else in the event of another part (its id, type, capabilities,
+# links, lastSeen) describes that part, as its customName does.
+DEVICE_KEYS_SHARED_BY_PARTS = frozenset({"isReachable", "room"})
+
+
+def _apply_device_fields(entity, info, own_device=True):
+    """Write the top-level fields of a hub device the entity's model has.
+
+    For another part of a split device (own_device False) only what the parts
+    share is taken, and never a null: it adds, it does not erase."""
+    model = getattr(entity, "_json_data", None)
+    if model is None:
+        return set()
+    fields = {key: raw for key, raw in info.items()
+              if key not in DEVICE_KEYS_WITH_THEIR_OWN_PATH}
+    if not own_device:
+        fields = {key: raw for key, raw in fields.items()
+                  if key in DEVICE_KEYS_SHARED_BY_PARTS and raw is not None}
+    return _write_fields(entity, model, fields)
+
+
+def _device_view(entity):
+    """What of a device the listener acts on when it changes: every model field
+    but the attributes (a dict of field values), the name of its room and its
+    name on the hub."""
+    data = entity._json_data
+    fields = getattr(type(data), "model_fields", None) or ()
+    return (
+        {name: getattr(data, name, None) for name in fields if name != "attributes"},
+        getattr(getattr(data, "room", None), "name", None),
+        getattr(getattr(data, "attributes", None), "custom_name", None),
+    )
 
 
 class registry_entry:
@@ -832,73 +892,36 @@ class hub_event_listener(threading.Thread):
             # False for another part of a split device routed to this entity.
             own_device = event_id == entity._json_data.id
 
-            reachability_changed = False
-            if "isReachable" in info:
-                try:
-                    logger.debug(f"Setting {id} reachable as {info['isReachable']}")
-                    entity._json_data.is_reachable=info["isReachable"]
-                    reachability_changed = True
-                except Exception as ex:
-                    logger.error(f"Failed to setattr is_reachable on device: {id} for msg: {msg}")
-                    logger.error(ex)
+            has_attributes = info.get("attributes") is not None
+            fields_before, room_before, name_before = _device_view(entity)
 
-            # Process room updates (room info comes as separate field, not in attributes)
-            room_changed = False
-            # The hub keeps the room on one part of a split device; another
-            # part may set it but not clear it.
-            if "room" in info and (own_device or info["room"] is not None):
-                try:
-                    room_data = info["room"]
-                    if room_data is not None:
-                        new_room = Room(
-                            id=room_data.get("id"),
-                            name=room_data.get("name"),
-                            color=room_data.get("color"),
-                            icon=room_data.get("icon")
-                        )
-                        if entity._json_data.room is None or entity._json_data.room.id != new_room.id:
-                            logger.debug(f"Setting {id} room to {new_room.name}")
-                            entity._json_data.room = new_room
-                            room_changed = True
-                        # Always ensure HA device registry area matches (even if _json_data room didn't change)
-                        # This handles the case where HA restarts and the room is already set in _json_data
-                        # but not yet in the HA device registry
-                        self._hass.async_create_task(
-                            self._update_device_area(entity._json_data.relation_id or id, new_room.name)
-                        )
-                    elif entity._json_data.room is not None:
-                        # Room was removed
-                        logger.debug(f"Removing room from {id}")
-                        entity._json_data.room = None
-                        room_changed = True
-                        self._hass.async_create_task(
-                            self._update_device_area(entity._json_data.relation_id or id, "")
-                        )
-                except Exception as ex:
-                    logger.error(f"Failed to set room on device: {id} for msg: {msg}")
-                    logger.error(ex)
-
-            has_attributes = "attributes" in info and info["attributes"] is not None
-            name_changed = False
-            new_name = None
-
+            _apply_device_fields(entity, info, own_device=own_device)
             if has_attributes:
-                attributes = info["attributes"]
-                old_name = getattr(entity._json_data.attributes, "custom_name", None)
-                applied = _apply_attributes(entity, attributes, own_device=own_device)
-                # Track name changes for device registry update
-                if "customName" in applied and attributes["customName"] != old_name:
-                    name_changed = True
-                    new_name = attributes["customName"]
+                _apply_attributes(entity, info["attributes"], own_device=own_device)
 
-                # Update HA device registry name if customName changed
-                if name_changed and new_name is not None:
-                    self._hass.async_create_task(
-                        self._update_device_name(entity._json_data.relation_id or id, new_name)
-                    )
+            # What has to follow is read from the device before and after, not
+            # from which keys the event happened to carry.
+            fields_after, room_after, name_after = _device_view(entity)
+            ha_device = entity._json_data.relation_id or id
 
-            # Update HA state if attributes changed OR if reachability/room changed
-            if has_attributes or reachability_changed or room_changed:
+            if room_after != room_before:
+                # The Home Assistant area follows the room on the hub when the
+                # room changes, and only then: a user may keep a device in
+                # another area, and every reconnect replays every room.
+                logger.debug(f"Room of {id} changed from {room_before} to {room_after}")
+                self._hass.async_create_task(
+                    self._update_device_area(ha_device, room_after or "")
+                )
+
+            if name_after != name_before and name_after is not None:
+                self._hass.async_create_task(
+                    self._update_device_name(ha_device, name_after)
+                )
+
+            # An event with attributes always writes state (a light's echo
+            # filter and the push throttle decide from there); without them
+            # only when the device itself changed, e.g. its reachability.
+            if has_attributes or fields_after != fields_before:
                 entity.async_schedule_update_ha_state(False)
 
                 if registry_value.cascade_entity is not None:

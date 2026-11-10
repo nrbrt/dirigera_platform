@@ -276,27 +276,8 @@ def test_own_null_is_still_applied():
     assert remote._json_data.attributes.battery_percentage is None
 
 
-def _room_event(device_id, room):
-    return json.dumps({"type": "deviceStateChanged", "data": {
-        "id": device_id, "deviceType": "genericSwitch", "room": room}})
-
-
-def test_other_half_does_not_clear_the_room():
-    # The hub keeps the room on one part only (seen on a live hub for BILRESA,
-    # GRILLPLATS and MYGGSPRAY).
-    remote = _remote()
-    remote._json_data.room = "Hal"
-    _register(remote, "remote_1", "remote_2")
-    _listener().on_message(None, _room_event("remote_2", None))
-    assert remote._json_data.room == "Hal"
-
-
-def test_own_part_clears_the_room():
-    remote = _remote()
-    remote._json_data.room = "Hal"
-    _register(remote, "remote_1")
-    _listener().on_message(None, _room_event("remote_1", None))
-    assert remote._json_data.room is None
+# The room of a split device (another part may set it, not clear it) is with the
+# other top-level fields in test_device_fields.py.
 
 
 def test_misfit_warning_once_per_device(caplog):

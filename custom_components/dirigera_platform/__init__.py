@@ -22,10 +22,10 @@ from homeassistant.helpers import device_registry as dr, entity_registry as er
 
 from .const import (
     DOMAIN,
-    CONF_HIDE_DEVICE_SET_BULBS,
     CONF_ENABLED_PLATFORMS,
     DEFAULT_ENABLED_PLATFORMS,
     CONF_EXCLUDE_MATTER,
+    DEVICE_SET_MODEL,
     DEFAULT_EXCLUDE_MATTER,
     PLATFORM,
     DISCOVERY_COORDINATOR,
@@ -33,6 +33,7 @@ from .const import (
 from .hub_event_listener import hub_event_listener
 from .stale_devices import async_remove_stale_devices, is_stale, known_identifiers
 from .device_discovery import DeviceDiscoveryCoordinator, set_discovery_coordinator
+from .device_sets import DeviceSetIndex, resolve_device_set_mode, sets_wanted
 
 PLATFORMS_TO_SETUP = [  Platform.SWITCH, 
                         Platform.BINARY_SENSOR, 
@@ -56,7 +57,7 @@ def resolve_platforms(entry_data: dict) -> list[Platform]:
 logger = logging.getLogger("custom_components.dirigera_platform")
 
 
-def sync_platform_entity_registry(hass, entry, platforms) -> None:
+def sync_platform_entity_registry(hass, entry, platforms, hidden_unique_ids=frozenset()) -> None:
     """Hide the entities of platforms this entry no longer sets up (#47).
 
     Not forwarding a platform does not remove its entities. They stay in the
@@ -75,14 +76,27 @@ def sync_platform_entity_registry(hass, entry, platforms) -> None:
     off by hand keeps disabled_by USER and stays off, even when its platform is
     selected again. Entries are only written when the desired state differs, so
     a setup that changes nothing fires no registry events at all.
+
+    hidden_unique_ids are entities left out within a selected platform: the
+    lights the device set mode does not import. They are handled here,
+    in the same pass, rather than by the light platform: both filters use
+    disabled_by INTEGRATION, and two passes would undo each other on every
+    start (this one re-enabling what the other disabled, which also makes
+    Home Assistant reload the entry).
     """
     registry = er.async_get(hass)
-    wanted = {platform.value for platform in platforms}
+    domains = {platform.value for platform in platforms}
+
+    def wanted(reg_entry) -> bool:
+        if reg_entry.domain not in domains:
+            return False
+        return reg_entry.domain != "light" or reg_entry.unique_id not in hidden_unique_ids
+
     disabled = 0
     re_enabled = 0
 
     for reg_entry in er.async_entries_for_config_entry(registry, entry.entry_id):
-        selected = reg_entry.domain in wanted
+        selected = wanted(reg_entry)
         if not selected and reg_entry.disabled_by is None:
             registry.async_update_entity(
                 reg_entry.entity_id,
@@ -97,14 +111,36 @@ def sync_platform_entity_registry(hass, entry, platforms) -> None:
 
     if disabled or re_enabled or dev_disabled or dev_re_enabled:
         logger.info(
-            "Platform filter: disabled %d entities, re-enabled %d; "
+            "Platform and device set filter: disabled %d entities, re-enabled %d; "
             "disabled %d devices, re-enabled %d",
             disabled, re_enabled, dev_disabled, dev_re_enabled,
         )
 
 
+def _device_set_entity_ids(hass, entry) -> set:
+    """Unique ids of this entry's device set entities.
+
+    Found by their device's model rather than the device set index, so that
+    "Lights only" also hides a set that disappeared while Home Assistant was
+    stopped: no light is in it any more, so the index does not know it.
+    """
+    entity_reg = er.async_get(hass)
+    return {
+        reg_entry.unique_id
+        for device in dr.async_entries_for_config_entry(dr.async_get(hass), entry.entry_id)
+        if device.model == DEVICE_SET_MODEL
+        for reg_entry in er.async_entries_for_device(entity_reg, device.id, include_disabled_entities=True)
+        if reg_entry.domain == "light"
+    }
+
+
 def _sync_device_registry(hass, entry, entity_reg, wanted) -> tuple[int, int]:
     """Hide devices whose every entity belongs to a platform we no longer import.
+
+    wanted is the predicate of sync_platform_entity_registry: an entity is
+    kept when its platform is selected and the device set mode imports it.
+    A light inside a set is a device with one light entity, so under "Sets
+    only" the device goes too, as in the IKEA app.
 
     Disabling the entities alone was not enough, and that is what #47 actually
     asked for. Home Assistant keeps a device in the device registry as long as it
@@ -134,7 +170,7 @@ def _sync_device_registry(hass, entry, entity_reg, wanted) -> tuple[int, int]:
         if not entities:
             # No entities at all: nothing to base a decision on, so leave it be.
             continue
-        keep = any(e.domain in wanted for e in entities)
+        keep = any(wanted(e) for e in entities)
         if not keep and device.disabled_by is None:
             device_reg.async_update_device(
                 device.id, disabled_by=dr.DeviceEntryDisabler.INTEGRATION
@@ -151,7 +187,6 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
     {
         vol.Required(CONF_IP_ADDRESS): cv.string,
         vol.Required(CONF_TOKEN): cv.string,
-        vol.Optional(CONF_HIDE_DEVICE_SET_BULBS, default=True): cv.boolean
     }
 )
 
@@ -287,17 +322,6 @@ async def async_setup_entry(
     hass.data.setdefault(DOMAIN, {})
     hass_data = dict(entry.data)
 
-    # for backward compatibility
-    hide_device_set_bulbs : bool = True 
-    if CONF_HIDE_DEVICE_SET_BULBS in hass_data:
-         logger.debug("Found HIDE_DEVICE_SET *****  ")
-         #logger.debug(hass_data)
-         hide_device_set_bulbs = hass_data[CONF_HIDE_DEVICE_SET_BULBS]
-    else:
-        logger.debug("Not found HIDE_DEVICE_SET *****  ")
-        # If its not with HASS update it
-        hass_data[CONF_HIDE_DEVICE_SET_BULBS] = hide_device_set_bulbs
-
     ip = hass_data[CONF_IP_ADDRESS]
     # issue #39: back-fill unique_id on entries created before the duplicate
     # guard, so a future duplicate add is rejected too. Already-duplicated
@@ -359,7 +383,15 @@ async def async_setup_entry(
     # have its entities re-enabled first, otherwise the platform sets up while
     # the registry still lists them as disabled and they stay missing until the
     # next reload.
-    sync_platform_entity_registry(hass, entry, platforms)
+    # The lights the device set mode leaves out. The light platform sets
+    # up from the same index, so both agree on what is hidden.
+    device_set_index = DeviceSetIndex.from_lights(platform.lights)
+    hass.data[DOMAIN][entry.entry_id]["device_set_index"] = device_set_index
+    device_set_mode = resolve_device_set_mode(hass_data)
+    hidden_lights = device_set_index.hidden_unique_ids(device_set_mode)
+    if not sets_wanted(device_set_mode):
+        hidden_lights |= _device_set_entity_ids(hass, entry)
+    sync_platform_entity_registry(hass, entry, platforms, hidden_lights)
     await hass.config_entries.async_forward_entry_setups(entry, platforms)
 
     # Now lets start the event listener

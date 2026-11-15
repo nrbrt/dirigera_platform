@@ -153,10 +153,11 @@ class _FakeRegistryEntryDisabler:
 
 
 class _FakeEntry:
-    def __init__(self, entity_id, disabled_by=None, device_id=None):
+    def __init__(self, entity_id, disabled_by=None, device_id=None, unique_id=None):
         self.entity_id = entity_id
         self.disabled_by = disabled_by
         self.device_id = device_id
+        self.unique_id = unique_id or entity_id.split(".", 1)[1]
 
     @property
     def domain(self):
@@ -181,9 +182,10 @@ class _FakeDeviceEntryDisabler:
 
 
 class _FakeDevice:
-    def __init__(self, device_id, disabled_by=None):
+    def __init__(self, device_id, disabled_by=None, model=None):
         self.id = device_id
         self.disabled_by = disabled_by
+        self.model = model
 
 
 class _FakeDeviceRegistry:
@@ -237,12 +239,12 @@ def _load_sync_function(registry):
     return ns["sync_platform_entity_registry"]
 
 
-def _run(entries, selected, devices=None):
+def _run(entries, selected, devices=None, hidden=None):
     registry = _FakeRegistry(entries)
     registry.device_registry = _FakeDeviceRegistry(devices or [])
     fn = _load_sync_function(registry)
     platforms = [_Platform(name) for name in selected]
-    fn(object(), type("E", (), {"entry_id": "abc"})(), platforms)
+    fn(object(), type("E", (), {"entry_id": "abc"})(), platforms, hidden or frozenset())
     return registry
 
 
@@ -361,3 +363,130 @@ def test_running_twice_writes_no_device_the_second_time():
     first = list(registry.device_registry.writes)
     fn(object(), entry, platforms)
     assert registry.device_registry.writes == first, "tweede run moet niets schrijven"
+
+
+# --- The device set mode leaves entities out within the light platform -----
+#
+# Both filters use disabled_by INTEGRATION, so they run as one pass. Two passes
+# would undo each other on every start: the platform filter re-enabling the
+# lights the set mode disabled, which also makes Home Assistant reload the
+# entry 30 seconds later.
+
+
+def test_a_hidden_light_is_disabled_with_its_device():
+    """Sets only: a light inside a set goes, and so does its device."""
+    reg = _run(
+        [
+            _FakeEntry("light.spot", device_id="dev_spot", unique_id="bulb-1"),
+            _FakeEntry("light.spots_set", device_id="dev_set", unique_id="set-1"),
+        ],
+        ["light"],
+        devices=[_FakeDevice("dev_spot"), _FakeDevice("dev_set")],
+        hidden={"bulb-1"},
+    )
+    assert reg.writes == [("light.spot", "integration")]
+    assert reg.device_registry.writes == [("dev_spot", "integration")]
+
+
+def test_a_light_the_mode_takes_back_is_re_enabled():
+    reg = _run(
+        [_FakeEntry("light.spot", "integration", device_id="dev_spot", unique_id="bulb-1")],
+        ["light"],
+        devices=[_FakeDevice("dev_spot", "integration")],
+        hidden=set(),
+    )
+    assert reg.writes == [("light.spot", None)]
+    assert reg.device_registry.writes == [("dev_spot", None)]
+
+
+def test_the_platform_filter_does_not_re_enable_a_hidden_light():
+    """The light platform is selected, but the mode still leaves this one out."""
+    entries = [_FakeEntry("light.spot", "integration", unique_id="bulb-1")]
+    registry = _FakeRegistry(entries)
+    registry.device_registry = _FakeDeviceRegistry([])
+    fn = _load_sync_function(registry)
+    entry = type("E", (), {"entry_id": "abc"})()
+    for _ in range(2):
+        fn(object(), entry, [_Platform("light")], {"bulb-1"})
+    assert registry.writes == [], "no churn between the two filters"
+
+
+def test_a_user_disabled_light_stays_off_whatever_the_mode():
+    reg = _run(
+        [_FakeEntry("light.spot", "user", unique_id="bulb-1")],
+        ["light"],
+        hidden=set(),
+    )
+    assert reg.writes == []
+
+
+def test_hidden_ids_only_apply_within_selected_platforms():
+    """A deselected platform hides everything on it, hidden ids or not."""
+    reg = _run(
+        [_FakeEntry("light.lamp", unique_id="bulb-2"), _FakeEntry("switch.plug")],
+        ["switch"],
+        hidden={"bulb-1"},
+    )
+    assert reg.writes == [("light.lamp", "integration")]
+
+
+def test_setup_hands_the_set_mode_to_the_registry_sync():
+    src = _function_source("async_setup_entry")
+    assert "hidden_unique_ids(" in src and "resolve_device_set_mode(" in src
+    assert src.index("hidden_unique_ids(") < src.index("sync_platform_entity_registry(")
+
+
+def test_hidden_ids_only_hide_lights():
+    """A non-light entity that happens to share a hidden id stays enabled."""
+    reg = _run(
+        [_FakeEntry("light.spot", unique_id="bulb-1"), _FakeEntry("sensor.spot", unique_id="bulb-1")],
+        ["light", "sensor"],
+        hidden={"bulb-1"},
+    )
+    assert reg.writes == [("light.spot", "integration")]
+
+
+def _load_device_set_entity_ids(registry):
+    """Exec the real _device_set_entity_ids against the fake registries."""
+    node = next(
+        n for n in TREE.body
+        if isinstance(n, ast.FunctionDef) and n.name == "_device_set_entity_ids"
+    )
+    ns = {
+        "er": type("er", (), {
+            "async_get": staticmethod(lambda hass: registry),
+            "async_entries_for_device": staticmethod(
+                lambda reg, device_id, include_disabled_entities=False: [
+                    e for e in reg.entries if e.device_id == device_id
+                ]
+            ),
+        }),
+        "dr": type("dr", (), {
+            "async_get": staticmethod(lambda hass: registry.device_registry),
+            "async_entries_for_config_entry": staticmethod(lambda reg, entry_id: reg.devices),
+        }),
+        "DEVICE_SET_MODEL": _load_const().DEVICE_SET_MODEL,
+    }
+    exec(compile(ast.Module(body=[node], type_ignores=[]), INIT, "exec"), ns)
+    return ns["_device_set_entity_ids"]
+
+
+def test_lights_only_finds_set_entities_the_hub_no_longer_has():
+    """Sets are recognised by their device's model, so a set that disappeared
+    while Home Assistant was stopped is still hidden under Lights only."""
+    registry = _FakeRegistry([
+        _FakeEntry("light.gone_set", "integration", device_id="dev_set", unique_id="set-gone"),
+        _FakeEntry("light.spot", device_id="dev_spot", unique_id="bulb-1"),
+    ])
+    registry.device_registry = _FakeDeviceRegistry([
+        _FakeDevice("dev_set", "integration", model="Device Set"),
+        _FakeDevice("dev_spot", model="TRADFRI bulb"),
+    ])
+    fn = _load_device_set_entity_ids(registry)
+    assert fn(object(), type("E", (), {"entry_id": "abc"})()) == {"set-gone"}
+
+
+def test_setup_hides_every_set_entity_under_lights_only():
+    src = _function_source("async_setup_entry")
+    assert "_device_set_entity_ids(" in src
+    assert src.index("_device_set_entity_ids(") < src.index("sync_platform_entity_registry(")

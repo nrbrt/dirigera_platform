@@ -6,16 +6,14 @@
     "step": {
       "user": {
         "data": {
-          "ip_address": "IP do Hub",
-          "hide_device_set_bulbs": "Ocultar Lâmpadas Definidas do Dispositivo"
+          "ip_address": "IP do Hub"
         },
         "description": "Introduza os Detalhes do Hub IKEA Dirigera",
         "title": "Configuração do Hub IKEA Dirigera"
       },
       "action": {
         "data": {
-          "ip_address": "IP do Hub",
-          "hide_device_set_bulbs": "Ocultar Lâmpadas Definidas do Dispositivo"
+          "ip_address": "IP do Hub"
         },
         "description": "Pressione o botão de ação no hub dirigera e prima Submeter.",
         "title": "Configuração do Hub IKEA Dirigera"
@@ -31,15 +29,13 @@
         "title": "Plataforma do Hub IKEA Dirigera",
         "data": {
           "ip_address": "IP do Hub",
-          "token": "Token",
-          "hide_device_set_bulbs": "Ocultar Lâmpadas Definidas do Dispositivo"
+          "token": "Token"
         },
         "description": "Atualizar Definições do Hub IKEA Dirigera..."
       },
       "action": {
         "data": {
-          "ip_address": "IP do Hub",
-          "hide_device_set_bulbs": "Ocultar Lâmpadas Definidas do Dispositivo"
+          "ip_address": "IP do Hub"
         },
         "description": "Pressione o botão de ação no hub dirigera e prima Submeter.",
         "title": "Configuração do Hub IKEA Dirigera"

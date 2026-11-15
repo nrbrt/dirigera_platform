@@ -33,6 +33,27 @@ def get_device_by_identifier(device_reg, identifier, config_entry_id):
 
 logger = logging.getLogger("custom_components.dirigera_platform.hub_event_listener")
 
+_DOMAIN = "dirigera_platform"
+
+DEVICE_SET_EVENTS = ("deviceSetCreated", "deviceSetUpdated", "deviceSetDeleted")
+
+
+def _push_state(entity) -> None:
+    """Write an entity's state to Home Assistant, if it is in Home Assistant.
+
+    Every light has an entity registered here, including a light that the
+    device set mode leaves out of Home Assistant. A set takes its state from
+    its first light, so that light's events are applied either way. Its own
+    state is written only while it is added (hass is set) and enabled. A light
+    that the mode disabled while Home Assistant runs is skipped too, since
+    Home Assistant warns about writes to disabled entities.
+    """
+    # The registry also holds device wrappers (base_classes), which are not
+    # entities: they have neither attribute and push to their own entities.
+    if getattr(entity, "hass", True) is None or not getattr(entity, "enabled", True):
+        return
+    entity.schedule_update_ha_state(False)
+
 DATE_TIME_FORMAT:str =  "%Y-%m-%dT%H:%M:%S.%fZ"
 
 controller_trigger_last_time_map = {}
@@ -274,6 +295,9 @@ class hub_event_listener(threading.Thread):
     def get_registry_entry(hub_key: str, id: str) -> registry_entry:
         return hub_event_listener.device_registry.get(hub_key, {}).get(id)
 
+    def unregister(hub_key: str, id: str):
+        hub_event_listener.device_registry.get(hub_key, {}).pop(id, None)
+
     def unregister_hub(hub_key: str):
         hub_event_listener.device_registry.pop(hub_key, None)
 
@@ -287,6 +311,36 @@ class hub_event_listener(threading.Thread):
 
     def _own_registry(self) -> dict:
         return hub_event_listener.device_registry.get(self._hub_key, {})
+
+    def _device_sets(self):
+        """This entry's device set manager (light.py), None without the light platform."""
+        data = getattr(self._hass, "data", None) or {}
+        return data.get(_DOMAIN, {}).get(self._config_entry_id, {}).get("device_sets")
+
+    def _schedule(self, fn, *args) -> None:
+        """Run a device set manager method on the event loop.
+
+        The manager adds and removes entities and edits the registries, which
+        must happen on the loop, while this runs on the WebSocket thread.
+        """
+        if self._request_to_stop or self._loop.is_closed():
+            return
+        self._loop.call_soon_threadsafe(fn, *args)
+
+    def parse_device_set_event(self, msg):
+        """deviceSetCreated / deviceSetUpdated / deviceSetDeleted.
+
+        The hub sends {id, name, icon} for the first two and {id} on delete.
+        Lights joining or leaving a set arrive separately, as the deviceSet of
+        a deviceStateChanged.
+        """
+        data = msg.get("data")
+        if not isinstance(data, dict) or not data.get("id"):
+            logger.warning(f"discarding {msg.get('type')} without data/id: {msg}")
+            return
+        manager = self._device_sets()
+        if manager is not None:
+            self._schedule(manager.async_handle_set_event, msg["type"], data["id"], data.get("name"))
     
     # Dirigera hubs disconnect WebSocket clients after ~60 minutes of
     # "inactivity". Crucially, the hub does NOT count WebSocket protocol-level
@@ -545,10 +599,16 @@ class hub_event_listener(threading.Thread):
                     logger.debug(f"Scene action: set color_mode to COLOR_TEMP for {device_id}")
 
             if updated:
+                # Same shutdown guard as the deviceStateChanged path (#42).
+                if self._request_to_stop or self._loop.is_closed():
+                    return
                 try:
-                    entity.schedule_update_ha_state()
+                    _push_state(entity)
+                    if registry_value.cascade_entity is not None:
+                        _push_state(registry_value.cascade_entity)
                     logger.debug(f"Scene action: scheduled HA state update for {device_id}")
                 except Exception as ex:
+                    # One entity must not keep the scene's other actions from applying.
                     logger.warning(f"Scene action: failed to schedule update for {device_id}: {ex}")
 
     def parse_remote_press_event(self, msg):
@@ -636,6 +696,9 @@ class hub_event_listener(threading.Thread):
             if msg['type'] == "remotePressEvent":
                 logger.debug(f"Found remotePressEvent message... ")
                 return self.parse_remote_press_event(msg)
+
+            if msg['type'] in DEVICE_SET_EVENTS:
+                return self.parse_device_set_event(msg)
 
             # Handle deviceAdded events - trigger dynamic discovery
             if msg['type'] == "deviceAdded":
@@ -877,12 +940,25 @@ class hub_event_listener(threading.Thread):
                 # has already been closed.
                 if self._request_to_stop or self._loop.is_closed():
                     return
-                entity.schedule_update_ha_state(False)
+                _push_state(entity)
 
                 if registry_value.cascade_entity is not None:
-                    # Cascade the update
+                    # Cascade the update: a device set takes its state from
+                    # this light, whether or not the light is imported itself.
                     logger.debug(f"Cascading to cascade entity : {registry_value.cascade_entity.unique_id}")
-                    registry_value.cascade_entity.schedule_update_ha_state(False)
+                    _push_state(registry_value.cascade_entity)
+
+            # A light joined or left a device set. Plain state events carry
+            # no deviceSet; this one has deviceSet [{id, name, icon}] or [].
+            # The manager ignores ids that are not lights it tracks. Queued
+            # after the state write above: joining a set under "Sets only"
+            # disables the light, and Home Assistant warns about a write that
+            # reaches an entity after it was disabled.
+            manager = self._device_sets() if "deviceSet" in info else None
+            if manager is not None:
+                self._schedule(
+                    manager.async_handle_membership, event_id, info["deviceSet"], entity._json_data.room
+                )
 
         except Exception:
             # Visible at default log level: a swallowed DEBUG here used to hide
@@ -976,6 +1052,11 @@ class hub_event_listener(threading.Thread):
                         f"resync: failed to apply state for {device.get('id')}: {ex}"
                     )
             logger.info(f"State resync applied for {len(devices)} devices after reconnect")
+            # Queued behind the membership updates of the replay: a set no
+            # light is in any more was deleted while we were disconnected.
+            manager = self._device_sets()
+            if manager is not None:
+                self._schedule(manager.async_prune_empty_sets)
         finally:
             self._resyncing = False
 

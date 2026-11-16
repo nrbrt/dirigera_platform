@@ -306,3 +306,93 @@ def test_no_usable_hub_list_means_nothing_is_found():
     assert sd.excluded_matter_identifiers([], _is_matter) is None
     assert sd.excluded_matter_identifiers(None, _is_matter) is None
     assert sd.find_excluded_matter_devices([_device("d1", "m1")], set()) == []
+
+
+# --- #75: the wiring in __init__.py (review 16-11-2026) ---------------------------
+# The two functions are lifted out of __init__.py with ast, as in
+# test_platform_filtering.py, with the real HubX filter and is_matter_device
+# from dirigera_lib_patch.py on top of a fake base Hub.
+
+import __future__
+import ast
+import logging
+
+_COMPONENT = os.path.join(os.path.dirname(__file__), "..", "custom_components", "dirigera_platform")
+
+
+def _lift(path, names, ns):
+    with open(path) as fh:
+        source = fh.read()
+    nodes = [n for n in ast.parse(source).body
+             if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and n.name in names]
+    assert {n.name for n in nodes} == set(names), names
+    exec(compile(ast.Module(body=nodes, type_ignores=[]), path, "exec",
+                 flags=__future__.annotations.compiler_flag, dont_inherit=True), ns)
+    return ns
+
+
+class _BaseHub:
+    """Stands in for dirigera.Hub: answers /devices with the hub's raw list."""
+    raw = []
+
+    def __init__(self, token, ip_address, port="8443", api_version="v1"):
+        pass
+
+    def get(self, route):
+        assert route == "/devices"
+        return list(type(self).raw)
+
+
+_LIB = _lift(os.path.join(_COMPONENT, "dirigera_lib_patch.py"), ["is_matter_device", "HubX"],
+             {"Hub": _BaseHub, "MATTER_ATTRIBUTE_KEYS": ("discriminator", "qrCode", "setupCode")})
+_INIT = _lift(os.path.join(_COMPONENT, "__init__.py"),
+              ["async_remove_config_entry_device", "_async_remove_excluded_matter_devices"], {
+                  "Hub": _BaseHub, "HubX": _LIB["HubX"], "is_matter_device": _LIB["is_matter_device"],
+                  "dr": _dr, "er": _er, "DOMAIN": "dirigera_platform",
+                  "CONF_TOKEN": "token", "CONF_IP_ADDRESS": "ip_address",
+                  "CONF_EXCLUDE_MATTER": "exclude_matter", "DEFAULT_EXCLUDE_MATTER": False,
+                  "excluded_matter_identifiers": sd.excluded_matter_identifiers,
+                  "find_excluded_matter_devices": sd.find_excluded_matter_devices,
+                  "known_identifiers": sd.known_identifiers, "is_stale": sd.is_stale,
+                  "logger": logging.getLogger(__name__),
+              })
+
+_DATA = {"token": "t", "ip_address": "hub", "exclude_matter": True}
+
+
+def test_the_real_matter_test_marks_the_same_devices_as_the_test_copy():
+    for device in MATTER_HUB + HUB:
+        assert _LIB["is_matter_device"](device) == _is_matter(device)
+
+
+def test_startup_cleanup_removes_only_the_matter_devices_and_logs_what_went(monkeypatch, caplog):
+    # With the filtering HubX instead of the plain Hub the cleanup would see
+    # no Matter devices and remove nothing.
+    monkeypatch.setattr(_BaseHub, "raw", MATTER_HUB)
+    _registry["current"] = _FakeRegistry([_device("d1", "m1"), _device("d2", "m2"), _device("d3", "z1"),
+                                          _device("d4", "mix"), _device("d5", "set-id")])
+    _entities["by_device"] = {"d1": [SimpleNamespace(entity_id="light.matter_bulb")]}
+    entry = SimpleNamespace(entry_id="e1")
+    with caplog.at_level(logging.WARNING):
+        removed = asyncio.run(_INIT["_async_remove_excluded_matter_devices"](_Hass(), entry, _DATA))
+    assert sorted(removed) == ["d1", "d2"]
+    assert sorted(_registry["current"].removed) == ["d1", "d2"]
+    assert "hub id m1, entities light.matter_bulb" in caplog.text
+
+
+def test_startup_cleanup_removes_nothing_when_the_hub_cannot_be_read(monkeypatch):
+    def broken(self, route):
+        raise OSError("hub unreachable")
+    monkeypatch.setattr(_BaseHub, "get", broken)
+    _registry["current"] = _FakeRegistry([_device("d1", "m1")])
+    removed = asyncio.run(_INIT["_async_remove_excluded_matter_devices"](_Hass(), SimpleNamespace(entry_id="e1"), _DATA))
+    assert removed == [] and _registry["current"].removed == []
+
+
+@pytest.mark.parametrize("option, allowed", [(True, True), (False, False)])
+def test_the_delete_button_allows_an_excluded_matter_device_only_with_the_option(monkeypatch, option, allowed):
+    monkeypatch.setattr(_BaseHub, "raw", MATTER_HUB)
+    entry = SimpleNamespace(entry_id="e1", data={**_DATA, "exclude_matter": option})
+    assert asyncio.run(_INIT["async_remove_config_entry_device"](_Hass(), entry, _device("d1", "m1"))) is allowed
+    # A Zigbee device the hub still has is never deletable.
+    assert asyncio.run(_INIT["async_remove_config_entry_device"](_Hass(), entry, _device("d3", "z1"))) is False

@@ -17,6 +17,7 @@ import asyncio
 import importlib.util
 import logging
 import os
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -63,6 +64,7 @@ def _load():
         # _send also writes the device set that follows the light (merge with #76)
         "hub_event_listener": SimpleNamespace(get_registry_entry=lambda hub_key, light_id: None),
         "asyncio": asyncio,
+        "LEVEL_AFTER_ON_S": 0.8,
     }
     exec(compile(ast.fix_missing_locations(ast.Module(body=funcs + methods, type_ignores=[])), LIGHT, "exec"), ns)
     return ns
@@ -196,6 +198,7 @@ def _bulb(hub):
                                  color_hue=None, color_saturation=None, color_mode="temperature")
     bulb = SimpleNamespace(
         _hub=hub, hass=_Hass(), _pending=pending_command.PendingCommand(), name="bulb-1",
+        _command_seq=0, _level_not_before=0.0,
         _json_data=SimpleNamespace(id="bulb-1", attributes=attributes,
                                    capabilities=SimpleNamespace(can_receive=DUAL)),
         min_color_temp_kelvin=RANGE[0], max_color_temp_kelvin=RANGE[1],
@@ -218,7 +221,7 @@ def _run(hub, command):
     asyncio.run(main())
 
 
-def test_turn_on_from_off_sends_the_level_in_a_second_patch_and_updates_the_model():
+def test_turn_on_from_off_sends_the_level_in_a_second_patch_and_updates_the_model(short_wait):
     """From off the bulb takes a lightLevel only once it is on (live hub,
     16-11-2026: in the same PATCH it ended part-way, 3 of 3; ~1 s later it
     was right, 3 of 3). Colour goes with isOn, the level after."""
@@ -239,6 +242,73 @@ def test_turn_on_from_off_sends_the_level_in_a_second_patch_and_updates_the_mode
     assert (a.color_hue, a.color_saturation) == (21845 * 360 / 65536, 203 / 254)
     # What was sent is kept until the hub confirms it (test_light_echo.py).
     assert bulb._pending.holds_back("light_level", 10) is True
+
+
+@pytest.fixture
+def short_wait():
+    """The wait before a level, shortened; restored after the test."""
+    saved = NS["LEVEL_AFTER_ON_S"]
+    NS["LEVEL_AFTER_ON_S"] = 0.2
+    yield 0.2
+    NS["LEVEL_AFTER_ON_S"] = saved
+
+
+class _TimedHub(_Hub):
+    def __init__(self):
+        super().__init__()
+        self.at = []
+
+    def patch(self, route, data):
+        self.at.append(time.monotonic())
+        super().patch(route, data)
+
+
+def _levels(hub):
+    return [item["attributes"]["lightLevel"] for _, data in hub.sent for item in data
+            if "lightLevel" in item["attributes"]]
+
+
+def test_the_level_waits_after_the_on_patch(short_wait):
+    # Without the wait the level ends part-way (0.45 s: 0 of 3 right).
+    hub = _TimedHub()
+    bulb = _bulb(hub)
+    _run(hub, NS["async_turn_on"](bulb, brightness=115))
+    assert len(hub.at) == 2
+    assert hub.at[1] - hub.at[0] >= short_wait
+
+
+def test_a_newer_level_wins_over_one_still_waiting(short_wait):
+    """Review 16-11-2026: turn_on(77) from off and turn_on(255) 0.3 s later
+    sent 100 and then the older 30, which the bulb ended on. The newer
+    command also waits while the bulb is coming on."""
+    hub = _TimedHub()
+    bulb = _bulb(hub)
+
+    async def both():
+        first = asyncio.ensure_future(NS["async_turn_on"](bulb, brightness=77))
+        await asyncio.sleep(short_wait / 3)
+        await NS["async_turn_on"](bulb, brightness=255)
+        await first
+
+    _run(hub, both())
+    assert _levels(hub) == [100]
+    assert bulb._json_data.attributes.light_level == 100
+
+
+def test_turn_off_drops_a_level_still_waiting(short_wait):
+    hub = _TimedHub()
+    bulb = _bulb(hub)
+
+    async def on_then_off():
+        first = asyncio.ensure_future(NS["async_turn_on"](bulb, brightness=77))
+        await asyncio.sleep(short_wait / 3)
+        await NS["async_turn_off"](bulb)
+        await first
+
+    _run(hub, on_then_off())
+    assert _levels(hub) == []
+    assert hub.sent[-1] == ("/devices/bulb-1", [{"attributes": {"isOn": False}}])
+    assert bulb._json_data.attributes.is_on is False
 
 
 def test_turn_on_while_on_is_one_patch():

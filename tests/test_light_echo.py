@@ -99,6 +99,7 @@ def _load_bulb():
         "to_snake_case": hel.to_snake_case,
         "PendingCommand": getattr(pc, "PendingCommand", None),
         "asyncio": asyncio,
+        "LEVEL_AFTER_ON_S": 0.8,
     }
     exec(compile(ast.fix_missing_locations(ast.Module(body=nodes, type_ignores=[])), LIGHT, "exec"), ns)
     return ns["ikea_bulb"]
@@ -573,3 +574,13 @@ def test_the_set_follows_when_a_command_window_ends(setup, monkeypatch, in_ha):
     setup.run(asyncio.sleep(0.2))          # the window ends, 20 stands
     assert _level(bulb) == 20
     assert device_set.pushed - before == 1
+
+
+def test_a_bulb_without_colour_has_no_hs_color():
+    # A white or dimmable bulb has no hue or saturation. Reading hs_color
+    # raised TypeError, which froze a device set that reads every member
+    # (review 16-11-2026).
+    hs = ikea_bulb.hs_color.fget
+    assert hs(SimpleNamespace(color_hue=None, color_saturation=None)) is None
+    assert hs(SimpleNamespace(color_hue=120.0, color_saturation=None)) is None
+    assert hs(SimpleNamespace(color_hue=120.0, color_saturation=0.5)) == (120.0, 50.0)

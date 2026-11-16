@@ -695,3 +695,46 @@ def test_a_light_joining_later_gets_the_set_as_its_cascade():
     assert world.cascade_of("c") is kitchen
     world.manager.async_handle_membership("c", [], None)
     assert world.cascade_of("c") is None
+
+
+# --- review 16-11-2026 of the step-4 aggregate -----------------------------------
+
+class _NoHsBulb(FakeBulb):
+    """A dimmable bulb as ikea_bulb was: reading its hs_color raised TypeError
+    (no saturation). The set must not need it."""
+
+    @property
+    def hs_color(self):
+        raise TypeError("unsupported operand type(s) for *: 'NoneType' and 'int'")
+
+    @hs_color.setter
+    def hs_color(self, value):
+        pass
+
+
+def test_a_mixed_set_with_the_colour_controller_off_gives_the_controllers_colour():
+    world, kitchen = _kitchen((False, 80, (40.0, 70.0), "hs", True), (True, 90, None, "brightness", True))
+    world.bulbs["b"].__class__ = _NoHsBulb
+    world.bulbs["b"].supported_color_modes = {"brightness"}
+    assert kitchen.is_on is True
+    assert kitchen.color_mode == "hs"            # the controller's mode: the lit light's is not supported
+    assert kitchen.hs_color == (40.0, 70.0)      # and the controller's colour, nothing read from b
+    assert kitchen.brightness == 90
+
+
+def test_an_unreachable_light_does_not_keep_the_set_on():
+    # A bulb cut at the wall switch keeps its last isOn on the hub.
+    world, kitchen = _kitchen((True, 200, None, "hs", False), (False, 90, None, "hs", True))
+    assert kitchen.is_on is False
+    world2, kitchen2 = _kitchen((True, 200, None, "color_temp", False), (True, 100, None, "color_temp", True))
+    assert kitchen2.brightness == 100
+
+
+def test_the_colour_temperature_counts_only_lights_in_that_mode_within_the_range():
+    world, kitchen = _kitchen((True, 80, (10.0, 50.0), "hs", True), (True, 90, None, "color_temp", True))
+    a, b = world.bulbs["a"], world.bulbs["b"]
+    a.min_color_temp_kelvin, a.max_color_temp_kelvin = 2202, 4000
+    a.color_temp_kelvin, b.color_temp_kelvin = 4000, 2202   # a's is old: a is in colour mode
+    assert kitchen.color_temp_kelvin == 2202
+    a.color_mode, a.color_temp_kelvin, b.color_temp_kelvin = "color_temp", 4000, 6500
+    assert kitchen.color_temp_kelvin == 4000             # mean 5250, held to the controller's range

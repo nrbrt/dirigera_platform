@@ -461,12 +461,20 @@ async def _async_remove_excluded_matter_devices(hass, entry, hass_data) -> list[
     if not excluded:
         return []
     device_reg = dr.async_get(hass)
+    entity_reg = er.async_get(hass)
     removed = []
     for device in find_excluded_matter_devices(
             dr.async_entries_for_config_entry(device_reg, entry.entry_id), excluded):
+        # Enough in the log to see afterwards what went, should a user report
+        # a device that should have stayed.
+        entities = [e.entity_id for e in er.async_entries_for_device(
+            entity_reg, device.id, include_disabled_entities=True)]
         logger.warning(
-            "Skip Matter devices is on: removing %s, which the hub marks as a Matter "
-            "device and this integration no longer imports (#75)", device.name_by_user or device.name)
+            "Skip Matter devices is on: removing %s (hub id %s, entities %s), which the hub "
+            "marks as a Matter device and this integration no longer imports (#75)",
+            device.name_by_user or device.name,
+            ", ".join(sorted(i for d, i in device.identifiers if d == DOMAIN)),
+            ", ".join(entities) or "none")
         device_reg.async_update_device(device.id, remove_config_entry_id=entry.entry_id)
         removed.append(device.id)
     return removed

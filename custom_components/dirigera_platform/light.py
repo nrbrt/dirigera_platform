@@ -37,6 +37,10 @@ from .hub_event_listener import (
 from .hub_writer import writer_for
 from .pending_command import PendingCommand
 
+# Seconds after the on-PATCH of a bulb that was off before a lightLevel is
+# sent (live hub 16-11-2026, TRADFRI: 0.75 s and later right 3 of 3).
+LEVEL_AFTER_ON_S = 0.8
+
 logger = logging.getLogger("custom_components.dirigera_platform")
 
 
@@ -367,6 +371,11 @@ class ikea_bulb(LightEntity):
         self._json_data = json_data
         # What this bulb was last told and the hub has not confirmed yet.
         self._pending = PendingCommand(self._call_later, self._hub_values_stand)
+        # A level for a bulb that was just turned on waits (see async_turn_on):
+        # the loop time before which a lightLevel is not sent, and a counter
+        # so a newer command drops a level that is still waiting.
+        self._level_not_before = 0.0
+        self._command_seq = 0
 
         # Register the device for updates
         hub_event_listener.register(self._hub.websocket_base_url, self._json_data.id, registry_entry(self))
@@ -486,6 +495,10 @@ class ikea_bulb(LightEntity):
     
     @property
     def hs_color(self):
+        # A white or dimmable bulb has no hue or saturation (None): no colour
+        # then, instead of a TypeError (a device set reads every member).
+        if self.color_hue is None or self.color_saturation is None:
+            return None
         return ( self.color_hue, self.color_saturation * 100)
 
     @property
@@ -631,13 +644,31 @@ class ikea_bulb(LightEntity):
             # So from off the level goes in a second PATCH, ~1 s after the
             # first. The wait is outside the hub's writer: other bulbs are
             # not held up. Colour from off was right in one PATCH.
+            # A level asked while the bulb is still coming on (a second
+            # command within that second) waits as well, and a newer command
+            # (on or off) drops a level that is still waiting, so an older
+            # level never lands after a newer one (review 16-11-2026).
+            self._command_seq += 1
+            seq = self._command_seq
+            loop = asyncio.get_running_loop()
+            from_off = not self._json_data.attributes.is_on
             level_after = None
-            if not self._json_data.attributes.is_on and len(data) > 1 and "lightLevel" in data[-1]["attributes"]:
+            if len(data) > 1 and "lightLevel" in data[-1]["attributes"] \
+                    and (from_off or loop.time() < self._level_not_before):
                 level_after = ([data.pop()], {"light_level": updates.pop("light_level")})
             logger.debug(f"PATCH {self._json_data.id}: {data}" + (f" then {level_after[0]}" if level_after else ""))
             await self._send(data, updates)
+            if from_off:
+                # Counted from the end of the on-PATCH, which may have waited
+                # in the hub's writer behind other bulbs (~0.25 s on its own).
+                self._level_not_before = loop.time() + LEVEL_AFTER_ON_S
             if level_after is not None:
-                await asyncio.sleep(0.8)  # the on-PATCH itself took ~0.25 s
+                delay = self._level_not_before - loop.time()
+                if delay > 0:
+                    await asyncio.sleep(delay)
+                if seq != self._command_seq:
+                    logger.debug(f"PATCH {self._json_data.id}: level {level_after[0]} dropped, a newer command came")
+                    return
                 await self._send(*level_after)
         except Exception as ex:
             logger.error("error encountered turning on : {}".format(self.name))
@@ -646,6 +677,7 @@ class ikea_bulb(LightEntity):
 
     async def async_turn_off(self, **kwargs):
         logger.debug("light turn_off...")
+        self._command_seq += 1  # a level still waiting from a turn_on is dropped
         try:
             await self._send([{"attributes": {"isOn": False}}], {"is_on": False})
         except Exception as ex:
@@ -729,7 +761,15 @@ class ikea_bulb_device_set(LightEntity):
         return members
 
     def _lit(self) -> list:
-        return [m for m in self._ordered() if getattr(m, "is_on", False)]
+        # As Home Assistant's light group, an unavailable light does not
+        # count: an unreachable bulb keeps its last isOn (review 16-11-2026).
+        return [m for m in self._ordered()
+                if getattr(m, "available", False) and getattr(m, "is_on", False)]
+
+    def _lit_in(self, mode) -> list:
+        """The lights that are on and in this colour mode: a bulb in colour
+        mode still holds an old colour temperature, and the other way round."""
+        return [m for m in self._lit() if getattr(m, "color_mode", None) == mode]
 
     @staticmethod
     def _mean(values):
@@ -757,10 +797,9 @@ class ikea_bulb_device_set(LightEntity):
 
     @property
     def is_on(self):
-        members = self._members()
-        if not members:
+        if not self._members():
             return None
-        return any(getattr(m, "is_on", False) for m in members)
+        return bool(self._lit())
 
     @property
     def brightness(self):
@@ -779,21 +818,23 @@ class ikea_bulb_device_set(LightEntity):
 
     @property
     def color_temp_kelvin(self):
-        lit = self._lit()
-        if not lit:
+        mean = self._mean(getattr(m, "color_temp_kelvin", None) for m in self._lit_in(ColorMode.COLOR_TEMP))
+        if mean is None:
             return self._from_controller("color_temp_kelvin")
-        return self._mean(getattr(m, "color_temp_kelvin", None) for m in lit)
-
-    def _first_lit(self, attr, default=None):
-        for member in self._lit():
-            value = getattr(member, attr, None)
-            if value is not None:
-                return value
-        return self._from_controller(attr, default)
+        # Members of another type may reach beyond the controller's range,
+        # which is the range the set reports.
+        low, high = self.min_color_temp_kelvin, self.max_color_temp_kelvin
+        if low is not None and high is not None:
+            mean = max(low, min(high, mean))
+        return mean
 
     @property
     def hs_color(self):
-        return self._first_lit("hs_color")
+        for member in self._lit_in(ColorMode.HS):
+            value = getattr(member, "hs_color", None)
+            if value is not None:
+                return value
+        return self._from_controller("hs_color")
 
     @property
     def supported_color_modes(self):
@@ -801,11 +842,16 @@ class ikea_bulb_device_set(LightEntity):
 
     @property
     def color_mode(self):
-        mode = self._first_lit("color_mode", ColorMode.ONOFF)
+        # The first light that is on in a mode the controller supports: a
+        # member of another type may be in a mode the controller lacks, and
+        # Home Assistant rejects a mode outside supported_color_modes. Else
+        # the controller's own mode, whose values the controller then gives.
         supported = self.supported_color_modes or {ColorMode.ONOFF}
-        # A member of another type may be in a mode the controller lacks;
-        # Home Assistant rejects a mode outside supported_color_modes.
-        return mode if mode in supported else self._from_controller("color_mode", ColorMode.ONOFF)
+        for member in self._lit():
+            mode = getattr(member, "color_mode", None)
+            if mode in supported:
+                return mode
+        return self._from_controller("color_mode", ColorMode.ONOFF)
 
     async def _each_member(self, method: str, **kwargs):
         # The hub's /devices/set/{id} PATCH is not reliable: on guaifi's hub

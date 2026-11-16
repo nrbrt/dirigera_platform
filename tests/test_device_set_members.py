@@ -48,6 +48,7 @@ NS, SOURCE = _methods()
 class _Bulb:
     def __init__(self, name, fail=False):
         self.name = name
+        self._json_data = SimpleNamespace(id=name)
         self.fail = fail
         self.calls = []
 
@@ -63,7 +64,10 @@ class _Bulb:
 
 
 def _set(bulbs):
-    entity = SimpleNamespace(name="Living", _device_set=SimpleNamespace(get_lights=lambda: bulbs))
+    # Since the merge with #76 the set asks a callable for its members NOW
+    # (membership changes while Home Assistant runs), and it is not in HA here.
+    entity = SimpleNamespace(name="Living", _device_set=SimpleNamespace(name="Living"),
+                             _members=lambda: bulbs, hass=None)
     entity._each_member = lambda method, **kw: NS["_each_member"](entity, method, **kw)
     return entity
 
@@ -91,3 +95,21 @@ def test_one_failing_member_does_not_stop_the_others_and_is_reported():
 def test_the_set_endpoint_is_no_longer_used():
     strings = [n.value for n in ast.walk(ast.parse(SOURCE)) if isinstance(n, ast.Constant) and isinstance(n.value, str)]
     assert not [s for s in strings if "/devices/set/" in s]
+
+
+def test_a_set_without_lights_raises_instead_of_doing_nothing():
+    with pytest.raises(RuntimeError, match="no lights"):
+        asyncio.run(NS["async_turn_on"](_set([])))
+
+
+def test_the_set_shows_the_new_state_at_once_when_in_home_assistant():
+    """R1 of #71: the set showed the old state after a command until an echo
+    came through. It takes its state from its controller, whose model holds
+    what the hub accepted, so it writes its state once the members are done."""
+    bulbs = [_Bulb("a"), _Bulb("b")]
+    entity = _set(bulbs)
+    writes = []
+    entity.hass = object()
+    entity.async_write_ha_state = lambda: writes.append(1)
+    asyncio.run(NS["async_turn_on"](entity, brightness=10))
+    assert writes == [1]

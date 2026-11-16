@@ -10,10 +10,17 @@ from homeassistant.components.light import PLATFORM_SCHEMA
 from homeassistant.const import CONF_IP_ADDRESS, CONF_TOKEN
 from homeassistant.core import callback
 import homeassistant.helpers.config_validation as cv
+from homeassistant.helpers.selector import (
+    SelectSelector,
+    SelectSelectorConfig,
+    SelectSelectorMode,
+)
 
 from .const import (
     DOMAIN,
-    CONF_HIDE_DEVICE_SET_BULBS,
+    CONF_DEVICE_SET_MODE,
+    DEFAULT_DEVICE_SET_MODE,
+    DEVICE_SET_MODES,
     CONF_POWER_PUSH_THROTTLE,
     CONF_ENABLED_PLATFORMS,
     DEFAULT_ENABLED_PLATFORMS,
@@ -22,12 +29,23 @@ from .const import (
     PLATFORM_LABELS,
     DEFAULT_POWER_PUSH_THROTTLE,
 )
+from .device_sets import resolve_device_set_mode
+
+# The labels are translated: strings.json, selector.device_set_mode.
+DEVICE_SET_MODE_SELECTOR = SelectSelector(
+    SelectSelectorConfig(
+        options=list(DEVICE_SET_MODES),
+        translation_key=CONF_DEVICE_SET_MODE,
+        mode=SelectSelectorMode.DROPDOWN,
+    )
+)
 
 logger = logging.getLogger("custom_components.dirigera_platform")
 
 HUB_SCHEMA = vol.Schema({
     vol.Required(CONF_IP_ADDRESS): cv.string,
-    vol.Optional(CONF_HIDE_DEVICE_SET_BULBS, default=True): cv.boolean,
+    # How lights that belong to an IKEA device set are imported.
+    vol.Optional(CONF_DEVICE_SET_MODE, default=DEFAULT_DEVICE_SET_MODE): DEVICE_SET_MODE_SELECTOR,
     vol.Optional(CONF_POWER_PUSH_THROTTLE, default=DEFAULT_POWER_PUSH_THROTTLE): vol.All(vol.Coerce(int), vol.Range(min=0)),
     # Issue #47: pick which platforms to import. Everything is selected by
     # default, so a user who never touches this sees no change.
@@ -48,10 +66,11 @@ def options_schema(data: Dict[str, Any]) -> vol.Schema:
     """
     return vol.Schema({
         vol.Required(CONF_IP_ADDRESS, default=data.get(CONF_IP_ADDRESS, "")): cv.string,
+        # An entry without the option shows what it gets: sets with lights.
         vol.Optional(
-            CONF_HIDE_DEVICE_SET_BULBS,
-            default=data.get(CONF_HIDE_DEVICE_SET_BULBS, True),
-        ): cv.boolean,
+            CONF_DEVICE_SET_MODE,
+            default=resolve_device_set_mode(data),
+        ): DEVICE_SET_MODE_SELECTOR,
         vol.Optional(
             CONF_POWER_PUSH_THROTTLE,
             default=data.get(CONF_POWER_PUSH_THROTTLE, DEFAULT_POWER_PUSH_THROTTLE),
@@ -106,7 +125,7 @@ class dirigera_platform_config_flow(config_entries.ConfigFlow, domain=DOMAIN):
     def __init__(self):
         self.ip = None
         self.code = None
-        self.hide_device_set_bulbs = True
+        self.device_set_mode = DEFAULT_DEVICE_SET_MODE
         self.power_push_throttle = DEFAULT_POWER_PUSH_THROTTLE
         self.code_verifier = None
 
@@ -123,7 +142,7 @@ class dirigera_platform_config_flow(config_entries.ConfigFlow, domain=DOMAIN):
             logger.debug(user_input)
 
             self.ip = user_input[CONF_IP_ADDRESS]
-            self.hide_device_set_bulbs = user_input[CONF_HIDE_DEVICE_SET_BULBS]
+            self.device_set_mode = user_input.get(CONF_DEVICE_SET_MODE, DEFAULT_DEVICE_SET_MODE)
             self.power_push_throttle = user_input.get(CONF_POWER_PUSH_THROTTLE, DEFAULT_POWER_PUSH_THROTTLE)
             self.enabled_platforms = user_input.get(CONF_ENABLED_PLATFORMS, DEFAULT_ENABLED_PLATFORMS)
             self.exclude_matter = user_input.get(CONF_EXCLUDE_MATTER, DEFAULT_EXCLUDE_MATTER)
@@ -175,7 +194,7 @@ class dirigera_platform_config_flow(config_entries.ConfigFlow, domain=DOMAIN):
 
             user_input[CONF_IP_ADDRESS] = self.ip
             user_input[CONF_TOKEN] = token
-            user_input[CONF_HIDE_DEVICE_SET_BULBS] = self.hide_device_set_bulbs
+            user_input[CONF_DEVICE_SET_MODE] = self.device_set_mode
             user_input[CONF_POWER_PUSH_THROTTLE] = self.power_push_throttle
             user_input[CONF_ENABLED_PLATFORMS] = getattr(self, "enabled_platforms", DEFAULT_ENABLED_PLATFORMS)
             user_input[CONF_EXCLUDE_MATTER] = getattr(self, "exclude_matter", DEFAULT_EXCLUDE_MATTER)
@@ -217,11 +236,12 @@ class OptionsFlowHandler(config_entries.OptionsFlowWithConfigEntry):
             logger.debug("async step init user input is not none...")
 
             self.ip = user_input[CONF_IP_ADDRESS]
-            self.hide_device_set_bulbs = user_input[CONF_HIDE_DEVICE_SET_BULBS]
+            self.device_set_mode = user_input.get(
+                CONF_DEVICE_SET_MODE, resolve_device_set_mode(dict(self.config_entry.data))
+            )
             self.power_push_throttle = user_input.get(CONF_POWER_PUSH_THROTTLE, DEFAULT_POWER_PUSH_THROTTLE)
             self.enabled_platforms = user_input.get(CONF_ENABLED_PLATFORMS, DEFAULT_ENABLED_PLATFORMS)
             self.exclude_matter = user_input.get(CONF_EXCLUDE_MATTER, DEFAULT_EXCLUDE_MATTER)
-            logger.debug(f"IN THIS STEP hide.. set {self.hide_device_set_bulbs}")
 
             if self.ip is None or len(self.ip.strip()) == 0:
                 logger.debug("IP specified is blank...")
@@ -277,7 +297,9 @@ class OptionsFlowHandler(config_entries.OptionsFlowWithConfigEntry):
         data = {
             CONF_IP_ADDRESS: self.ip,
             CONF_TOKEN: token,
-            CONF_HIDE_DEVICE_SET_BULBS: self.hide_device_set_bulbs,
+            CONF_DEVICE_SET_MODE: getattr(
+                self, "device_set_mode", DEFAULT_DEVICE_SET_MODE
+            ),
             CONF_POWER_PUSH_THROTTLE: getattr(
                 self, "power_push_throttle", DEFAULT_POWER_PUSH_THROTTLE
             ),
@@ -306,7 +328,6 @@ class OptionsFlowHandler(config_entries.OptionsFlowWithConfigEntry):
         # the config for use at a later time
         errors: Dict[str, str] = {}
         logger.debug("ip {}".format(self.ip))
-        logger.debug(f"hide device set bulbs {self.hide_device_set_bulbs}")
         # Try and get the token step_2
         try:
             token = await core.async_get_hass().async_add_executor_job(
@@ -316,7 +337,7 @@ class OptionsFlowHandler(config_entries.OptionsFlowWithConfigEntry):
 
             user_input[CONF_IP_ADDRESS] = self.ip
             user_input[CONF_TOKEN] = token
-            user_input[CONF_HIDE_DEVICE_SET_BULBS] = self.hide_device_set_bulbs
+            user_input[CONF_DEVICE_SET_MODE] = getattr(self, "device_set_mode", DEFAULT_DEVICE_SET_MODE)
             user_input[CONF_POWER_PUSH_THROTTLE] = getattr(self, "power_push_throttle", DEFAULT_POWER_PUSH_THROTTLE)
             user_input[CONF_ENABLED_PLATFORMS] = getattr(self, "enabled_platforms", DEFAULT_ENABLED_PLATFORMS)
             user_input[CONF_EXCLUDE_MATTER] = getattr(self, "exclude_matter", DEFAULT_EXCLUDE_MATTER)

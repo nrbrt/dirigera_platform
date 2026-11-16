@@ -1,9 +1,7 @@
 import asyncio
 import logging
-from typing import Optional
 
 from dirigera import Hub
-from dirigera.devices.device import Room
 from dirigera.devices.light import Light
 
 from homeassistant import config_entries, core
@@ -16,12 +14,26 @@ from homeassistant.components.light import (
 )
 
 from homeassistant.const import CONF_IP_ADDRESS, CONF_TOKEN
-from homeassistant.core import HomeAssistantError
+from homeassistant.core import HomeAssistantError, callback
+from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.entity import DeviceInfo
 
-from .const import DOMAIN, CONF_HIDE_DEVICE_SET_BULBS, PLATFORM, DISCOVERY_COORDINATOR
-from .hub_event_listener import hub_event_listener, registry_entry, to_snake_case, live_writes, replace_model
-from .device_discovery import get_discovery_coordinator
+from .const import DOMAIN, DEVICE_SET_MODEL
+from .device_sets import (
+    DeviceSet,
+    DeviceSetIndex,
+    light_wanted,
+    resolve_device_set_mode,
+    sets_wanted,
+)
+from .hub_event_listener import (
+    get_device_by_identifier,
+    hub_event_listener,
+    live_writes,
+    registry_entry,
+    replace_model,
+    to_snake_case,
+)
 from .hub_writer import writer_for
 from .pending_command import PendingCommand
 
@@ -51,93 +63,211 @@ async def async_setup_entry(
     config_entry: config_entries.ConfigEntry,
     async_add_entities,
 ):
+    """Set up the lights and device sets of a config entry."""
     logger.debug("LIGHT Starting async_setup_entry")
-    """Setup sensors from a config entry created in the integrations UI."""
     config = hass.data[DOMAIN][config_entry.entry_id]
-    logger.debug(config)
 
-    # hub = dirigera.Hub(config[CONF_TOKEN], config[CONF_IP_ADDRESS])
     hub = Hub(config[CONF_TOKEN], config[CONF_IP_ADDRESS])
 
-    #Backward compatibility
-    hide_device_set_bulbs = True
-    if CONF_HIDE_DEVICE_SET_BULBS in config:
-        hide_device_set_bulbs = config[CONF_HIDE_DEVICE_SET_BULBS]
-
-    logger.debug(f"found setting hide_device_set_bulbs : {hide_device_set_bulbs}")
-
-    all_lights = hass.data[DOMAIN][config_entry.entry_id]["gateway"].lights
+    all_lights = config["gateway"].lights
     logger.debug("Found {} total of all light entities to setup...".format(len(all_lights)))
-        
-    device_sets  = {}
-    lights = []
-    for light in all_lights:
-        if len(light._json_data.device_set) > 0:
-            for one_set in light._json_data.device_set:
-                id = one_set['id']
-                name = one_set['name']
-                # Use the room of the first light encountered in the set as the 'suggested area' for HA
-                suggested_room = light._json_data.room
 
-                target_device_set = None 
-                
-                if id not in device_sets:
-                    logger.debug(f"Found new device set {name}")
-                    device_sets[id] = device_set_model(id, name, suggested_room)
-                
-                target_device_set = device_sets[id]
-                target_device_set.add_light(light)
-                
-                # NOTE: the hide_device_set_bulbs option is deliberately not
-                # applied here (upstream 43219ee): hiding member bulbs breaks
-                # the device-set brightness slider, which proxies through a
-                # member bulb entity. Member bulbs are therefore always added.
-                lights.append(light)
-        else:
-            lights.append(light)
+    # The index was built by __init__.py for the registry sync.
+    manager = DeviceSetManager(
+        hass, config_entry, hub, config, config["device_set_index"], all_lights, async_add_entities
+    )
+    # The hub event listener finds the manager here.
+    config["device_sets"] = manager
+    manager.async_setup()
 
-    logger.debug(f"Found {len(device_sets.keys())} device_sets")
-    logger.debug(f"Found {len(lights)} lights to setup...")
-    async_add_entities([ikea_bulb_device_set(hub, device_sets[key], device_sets[key].get_lights()[0] ) for key in device_sets])
-
-    async_add_entities(lights)
-
-    # Register callback and known devices with discovery coordinator
-    discovery = hass.data[DOMAIN][config_entry.entry_id].get("discovery")
+    # Register callback and known devices with discovery coordinator. A light
+    # paired at runtime goes through the manager, so the mode applies to it.
+    discovery = config.get("discovery")
     if discovery:
-        discovery.register_platform_callback("light", async_add_entities)
+        discovery.register_platform_callback("light", manager.async_add_discovered)
         for light in all_lights:
             discovery.register_known_device(light._json_data.id)
         logger.debug(f"Registered {len(all_lights)} lights with discovery coordinator")
 
     logger.debug("LIGHT Complete async_setup_entry")
 
-class device_set_model:
-    def __init__(self, id, name, suggested_room: Optional[Room]):
-        logger.debug(f"device_set ctor {id} : {name}")
-        self._lights = []
-        self._name = name 
-        self._id = id
-        self._suggested_room = suggested_room
-        
-    @property
-    def id(self):
-        return self._id 
-    
-    @property
-    def name(self):
-        return self._name
 
-    @property
-    def suggested_room(self) -> Optional[Room]:
-        return self._suggested_room
-    
-    def get_lights(self) -> list:
-        return self._lights
-    
-    def add_light(self, bulb):
-        logger.debug(f"Adding {bulb.name} to device_set : {self.name}")
-        self._lights.append(bulb)
+class DeviceSetManager:
+    """Applies the device set mode to the light entities, at setup and while
+    Home Assistant runs.
+
+    Every light on the hub has an ikea_bulb, imported or not: the bulb is also
+    the model its set reads state from. Which entities are imported is decided
+    by the device set mode; the registry side (disabling what the mode leaves
+    out, re-enabling what it takes back) is done by
+    sync_platform_entity_registry in __init__.py, the same pass that applies
+    the platform selection (#47).
+
+    data is the entry's dict in hass.data, which holds the platforms set up.
+    Every method runs on the event loop; the hub event listener calls them
+    through call_soon_threadsafe.
+    """
+
+    def __init__(self, hass, config_entry, hub, data, index: DeviceSetIndex, bulbs, async_add_entities):
+        self._hass = hass
+        self._entry = config_entry
+        self._hub = hub
+        self._data = data
+        self._mode = resolve_device_set_mode(data)
+        self._index = index
+        self._bulbs = {bulb.unique_id: bulb for bulb in bulbs}
+        self._add_entities = async_add_entities
+        self._sets = {}
+        # Unique ids handed to async_add_entities. An entity instance can be
+        # added once; one removed since comes back through the entry reload
+        # Home Assistant schedules when its registry entry is re-enabled.
+        self._added = set()
+
+    @callback
+    def async_setup(self) -> None:
+        """Add the entities the mode imports."""
+        logger.debug(f"Device set mode {self._mode}, {len(self._index.set_ids())} device_sets")
+        if sets_wanted(self._mode):
+            self._add([self._make_set_entity(set_id) for set_id in self._index.set_ids()])
+        self._add(self._wanted_bulbs())
+
+    @callback
+    def async_add_discovered(self, entities) -> None:
+        """Discovery callback for lights paired while Home Assistant runs."""
+        for bulb in entities:
+            self._bulbs[bulb.unique_id] = bulb
+            data = bulb._json_data
+            self.async_handle_membership(bulb.unique_id, data.device_set, data.room)
+        self._add(self._wanted_bulbs())
+
+    @callback
+    def async_handle_membership(self, light_id, device_sets, room=None) -> None:
+        """A light's deviceSet changed: it joined a set, left one, or both."""
+        if light_id not in self._bulbs:
+            return
+        change = self._index.set_membership(light_id, device_sets, room)
+        if not change.changed:
+            return
+        logger.info(f"Light {light_id} device set: left {change.left}, joined {change.joined}")
+        if change.renamed:
+            self._async_renamed(change.renamed)
+        for set_id in (change.left, change.joined):
+            if set_id is not None:
+                self._async_members_changed(set_id)
+        if change.left or change.joined:
+            self._async_apply_mode()
+
+    @callback
+    def async_handle_set_event(self, event_type, set_id, name=None) -> None:
+        """deviceSetCreated / deviceSetUpdated / deviceSetDeleted."""
+        logger.info(f"{event_type} for device set {set_id} ({name})")
+        if event_type == "deviceSetDeleted":
+            self._async_delete_set(set_id)
+        elif self._index.get(set_id) is None:
+            # No entity yet: a set has no light to take its state and
+            # capabilities from until the first one joins.
+            self._index.create(set_id, name)
+        elif self._index.rename(set_id, name):
+            self._async_renamed(set_id)
+
+    @callback
+    def async_prune_empty_sets(self) -> None:
+        """Drop sets no light is in any more (deleted while disconnected)."""
+        for set_id in self._index.empty_set_ids():
+            logger.info(f"Device set {set_id} has no lights after the resync, removing it")
+            self._async_delete_set(set_id)
+
+    # --- internals --------------------------------------------------------
+
+    def _add(self, entities) -> None:
+        new = [e for e in entities if e.unique_id not in self._added]
+        if not new:
+            return
+        self._added.update(e.unique_id for e in new)
+        self._add_entities(new)
+
+    def _wanted_bulbs(self) -> list:
+        return [
+            bulb for light_id, bulb in self._bulbs.items()
+            if light_wanted(self._mode, self._index.in_set(light_id))
+        ]
+
+    def _member_bulbs(self, set_id) -> list:
+        """The ikea_bulb entities of a set's current members, controller first."""
+        device_set = self._index.get(set_id)
+        if device_set is None:
+            return []
+        return [self._bulbs[light_id] for light_id in device_set.members if light_id in self._bulbs]
+
+    def _make_set_entity(self, set_id):
+        controller = self._bulbs[self._index.controller_id(set_id)]
+        entity = ikea_bulb_device_set(self._hub, self._index.get(set_id), controller,
+                                      members=lambda: self._member_bulbs(set_id))
+        self._sets[set_id] = entity
+        return entity
+
+    def _async_members_changed(self, set_id) -> None:
+        """Create the set's entity, or point it at its current first light."""
+        entity = self._sets.get(set_id)
+        controller = self._bulbs.get(self._index.controller_id(set_id))
+        if entity is None:
+            if sets_wanted(self._mode) and controller is not None:
+                entity = self._make_set_entity(set_id)
+                self._add([entity])
+            return
+        entity.set_controller(controller)
+
+    def _async_renamed(self, set_id) -> None:
+        # The set entity takes its name from its device, so renaming the
+        # device renames the entity too, and Home Assistant writes its state.
+        name = self._index.get(set_id).name
+        device_reg = dr.async_get(self._hass)
+        device = get_device_by_identifier(device_reg, (DOMAIN, set_id), self._entry.entry_id)
+        if device is not None and device.name != name:
+            # The device's own name, never the name the user gave it (#72).
+            device_reg.async_update_device(device.id, name=name)
+
+    def _async_delete_set(self, set_id) -> None:
+        former = self._index.delete(set_id)
+        entity = self._sets.pop(set_id, None)
+        if entity is not None:
+            entity.set_controller(None)
+        hub_event_listener.unregister(self._hub.websocket_base_url, set_id)
+        self._added.discard(set_id)
+
+        # The hub deleted the set, and a new set gets a new id, so there is
+        # nothing to keep: remove its entity and detach its device rather than
+        # disabling them. Removing the registry entry also takes the live
+        # entity out of Home Assistant.
+        entity_reg = er.async_get(self._hass)
+        entity_id = entity_reg.async_get_entity_id("light", DOMAIN, set_id)
+        if entity_id is not None:
+            entity_reg.async_remove(entity_id)
+        device_reg = dr.async_get(self._hass)
+        device = get_device_by_identifier(device_reg, (DOMAIN, set_id), self._entry.entry_id)
+        if device is not None:
+            device_reg.async_update_device(device.id, remove_config_entry_id=self._entry.entry_id)
+
+        if former:
+            self._async_apply_mode()
+
+    def _async_apply_mode(self) -> None:
+        """Bring the light entities in line with the mode after a change."""
+        # Imported here: __init__.py imports this module through ikea_gateway.
+        from . import sync_platform_entity_registry
+
+        platforms = self._data.get("platforms")
+        if platforms is not None:
+            # Disabling a light's registry entry takes it out of Home
+            # Assistant. Re-enabling one makes Home Assistant reload the entry
+            # about 30 s later, which adds it again.
+            sync_platform_entity_registry(
+                self._hass, self._entry, platforms,
+                self._index.hidden_unique_ids(self._mode),
+            )
+        # A light that was never added can be added right away.
+        self._add(self._wanted_bulbs())
+
 
 def brightness_to_hub_level(brightness) -> int:
     """HA brightness (0-255) to the hub's lightLevel (1-100).
@@ -231,7 +361,7 @@ def light_turn_on_patch(can_receive, kwargs, kelvin_range):
 
 
 class ikea_bulb(LightEntity):
-    
+
     def __init__(self, hub, json_data : Light) -> None:
         logger.debug("ikea_bulb ctor...")
         self._hub = hub
@@ -419,7 +549,12 @@ class ikea_bulb(LightEntity):
             raise HomeAssistantError(ex, DOMAIN, "hub_exception")
         
     def _call_later(self, delay, fn, *args):
-        return self.hass.loop.call_later(delay, fn, *args)
+        # The running loop, not self.hass.loop: a light the device set mode
+        # keeps out of Home Assistant has no hass, but still gets commands
+        # through its set (#73/#76).
+        loop = self.hass.loop if self.hass is not None else asyncio.get_running_loop()
+        return loop.call_later(delay, fn, *args)
+
 
     def _hub_values_stand(self, values):
         """`values` (model attribute -> value) were reported by the hub while
@@ -429,7 +564,9 @@ class ikea_bulb(LightEntity):
             return
         for key, value in values.items():
             setattr(self._json_data.attributes, key, value)
-        if self.hass is not None:
+        # Only while this light is in Home Assistant and enabled: under the
+        # "Sets only" mode it is not, and still gets commands through its set.
+        if self.hass is not None and getattr(self, "enabled", True):
             self.async_schedule_update_ha_state(False)
 
     async def async_will_remove_from_hass(self):
@@ -456,7 +593,10 @@ class ikea_bulb(LightEntity):
             raise
         for key, value in self._pending.accepted(command).items():
             setattr(self._json_data.attributes, key, value)
-        self.async_schedule_update_ha_state(False)
+        # Only while this light is in Home Assistant and enabled: under the
+        # "Sets only" mode it is not, and still gets commands through its set.
+        if self.hass is not None and getattr(self, "enabled", True):
+            self.async_schedule_update_ha_state(False)
 
     async def async_turn_on(self, **kwargs):
         logger.debug("light turn_on...")
@@ -487,98 +627,110 @@ class ikea_bulb(LightEntity):
             logger.error(ex)
             raise HomeAssistantError(ex, DOMAIN, "hub_exception")
 
-# IKEA Device Set - Works wierdly
-# There is a post available to set the state but the GET for state
-# is not available, it would need to be derived from whichever is bulb/light
-# is available. Also the way the app behaves is replicated. The first bulb
-# in the set is what the state of the group is thus, that is what we also 
-# replicate
+# IKEA Device Set
+# The hub accepts a PATCH for the whole set, but there is no state to GET for
+# it, and the hub pushes no events for it either: it reports each light in the
+# set. As in the IKEA app, the set shows the state of its first light (the
+# controller). The controller's events reach the set through the cascade in
+# hub_event_listener, whether or not the light is imported itself.
 
 class ikea_bulb_device_set(LightEntity):
-    def __init__(self, hub, device_set: device_set_model, first_bulb: ikea_bulb) -> None:
-        logger.debug("ikea_bulb device_set ctor...")
-        logger.debug(f"Setting up device_set {device_set.id} with first bulb {first_bulb.unique_id}")
-        self._hub = hub
-        self._controller = first_bulb
-        self._device_set = device_set
+    # The entity is named after its device, the set. With a name of its own,
+    # Home Assistant joins the device name and the entity name, and a rename
+    # could leave the two out of step ("Kitchen 2 2").
+    _attr_has_entity_name = True
+    _attr_name = None
 
-        # Update cascade entity
-        registry_entry_of_bulb = hub_event_listener.get_registry_entry(self._hub.websocket_base_url, first_bulb.unique_id)
-        registry_entry_of_bulb.cascade_entity = self
+    def __init__(self, hub, device_set: DeviceSet, controller: ikea_bulb, members=None) -> None:
+        logger.debug(f"Setting up device_set {device_set.id} with first bulb {controller.unique_id}")
+        self._hub = hub
+        self._device_set = device_set
+        # Callable giving the set's current ikea_bulb entities (the manager
+        # knows them); without one, the controller alone.
+        self._members = members or (lambda: [self._controller] if self._controller is not None else [])
+        self._controller = None
+        hub_event_listener.register(self._hub.websocket_base_url, self.unique_id, registry_entry(self))
+        self.set_controller(controller)
+
+    def set_controller(self, bulb) -> None:
+        """Follow another light of the set, or none when the set is empty.
+
+        Moves the cascade: the hub event listener pushes this set's state
+        whenever the controller's state changes.
+        """
+        if bulb is self._controller:
+            return
+        hub_key = self._hub.websocket_base_url
+        if self._controller is not None:
+            old = hub_event_listener.get_registry_entry(hub_key, self._controller.unique_id)
+            if old is not None and old.cascade_entity is self:
+                old.cascade_entity = None
+        self._controller = bulb
+        if bulb is not None:
+            new = hub_event_listener.get_registry_entry(hub_key, bulb.unique_id)
+            if new is not None:
+                new.cascade_entity = self
+        if self.hass is not None:
+            self.async_write_ha_state()
 
     @property
     def should_poll(self):
-        return False 
-    
+        return False
+
     @property
     def unique_id(self):
         return self._device_set.id
 
     @property
     def available(self):
-        return self._controller.available
+        return self._controller is not None and self._controller.available
 
     @property
     def device_info(self) -> DeviceInfo:
-
-        # Register the device for updates
-        hub_event_listener.register(self._hub.websocket_base_url, self.unique_id, registry_entry(self))
-
         return DeviceInfo(
             identifiers={("dirigera_platform", self._device_set.id)},
-            name=self._device_set.name ,
+            name=self._device_set.name,
             manufacturer="IKEA",
-            model="Device Set",
+            model=DEVICE_SET_MODEL,
             sw_version="1.0",
-            suggested_area=self._device_set.suggested_room.name if self._device_set.suggested_room is not None else None,
+            suggested_area=self._device_set.room.name if self._device_set.room is not None else None,
         )
 
-    @property
-    def name(self):
-        return self._device_set.name 
-    
+    def _from_controller(self, attr, default=None):
+        """The controller's value, or default while the set has no light."""
+        return default if self._controller is None else getattr(self._controller, attr)
+
     @property
     def brightness(self):
-        return self._controller.brightness
+        return self._from_controller("brightness")
 
     @property
     def max_color_temp_kelvin(self):
-        return self._controller.max_color_temp_kelvin
+        return self._from_controller("max_color_temp_kelvin")
 
     @property
     def min_color_temp_kelvin(self):
-        return self._controller.min_color_temp_kelvin
-    
+        return self._from_controller("min_color_temp_kelvin")
+
     @property
     def color_temp_kelvin(self):
-        return self._controller.color_temp_kelvin
+        return self._from_controller("color_temp_kelvin")
 
     @property
     def hs_color(self):
-        return self._controller.hs_color
+        return self._from_controller("hs_color")
 
     @property
     def is_on(self):
-        return self._controller.is_on
+        return self._from_controller("is_on")
 
     @property
     def supported_color_modes(self):
-        return self._controller.supported_color_modes
+        return self._from_controller("supported_color_modes", {ColorMode.ONOFF})
 
     @property
     def color_mode(self):
-        return self._controller.color_mode
-
-    async def async_update(self):
-        try:
-            logger.debug("Update of device_set....")
-            #for light in self._device_set.get_lights():
-            #    await light.async_update()
-
-        except Exception as ex:
-            logger.error("error encountered running update on device_set : {}".format(self.name))
-            logger.error(ex)
-            raise HomeAssistantError(ex, DOMAIN, "hub_exception")
+        return self._from_controller("color_mode", ColorMode.ONOFF)
 
     async def _each_member(self, method: str, **kwargs):
         # The hub's /devices/set/{id} PATCH is not reliable: on guaifi's hub
@@ -587,15 +739,24 @@ class ikea_bulb_device_set(LightEntity):
         # command while it worked on its own. So a set sends each member its
         # own command, through the same per-light PATCH and per-hub writer as
         # a single bulb. Every member is tried; a failure is raised after.
-        # Members are read at startup, as the set's first bulb always was.
-        lights = self._device_set.get_lights()
+        # The members are the set's lights NOW: membership changes while Home
+        # Assistant runs (#73/#76), and a member may be a light the device set
+        # mode keeps out of Home Assistant (its writes still go to the hub).
+        lights = self._members()
+        if not lights:
+            raise HomeAssistantError(f"device set {self._device_set.name} has no lights", DOMAIN, "hub_exception")
         results = await asyncio.gather(
             *(getattr(light, method)(**kwargs) for light in lights),
             return_exceptions=True,
         )
-        failed = [light.name for light, result in zip(lights, results) if isinstance(result, Exception)]
+        # The set shows its controller's state, and the controller's model now
+        # holds what the hub accepted: show it at once instead of waiting for
+        # an echo that a command record may hold back (regression R1 of #71).
+        if self.hass is not None:
+            self.async_write_ha_state()
+        failed = [light._json_data.id for light, result in zip(lights, results) if isinstance(result, BaseException)]
         if failed:
-            logger.error(f"device_set {self.name}: {method} failed for {', '.join(failed)}")
+            logger.error(f"device_set {self._device_set.name}: {method} failed for {', '.join(failed)}")
             raise HomeAssistantError(f"{method} failed for {', '.join(failed)}", DOMAIN, "hub_exception")
 
     async def async_turn_on(self, **kwargs):

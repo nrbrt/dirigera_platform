@@ -6,16 +6,14 @@
       "step": {
         "user": {
           "data": {
-            "ip_address": "集中器 IP",
-            "hide_device_set_bulbs": "隱藏裝置組燈泡"
+            "ip_address": "集中器 IP"
           },
           "description": "請輸入 IKEA Dirigera 集中器詳細資訊",
           "title": "IKEA Dirigera 集中器設定"
         },
         "action": {
           "data": {
-            "ip_address": "集中器 IP",
-            "hide_device_set_bulbs": "隱藏裝置組燈泡"
+            "ip_address": "集中器 IP"
           },
           "description": "請按下 Dirigera 集中器上的動作按鈕，然後按下「送出」。",
           "title": "IKEA Dirigera 集中器設定"
@@ -31,15 +29,13 @@
           "title": "IKEA Dirigera 集中器平台",
           "data": {
             "ip_address": "集中器 IP",
-            "token": "權杖 (Token)",
-            "hide_device_set_bulbs": "隱藏裝置組燈泡"
+            "token": "權杖 (Token)"
           },
           "description": "正在更新 IKEA Dirigera 集中器設定..."
         },
         "action": {
           "data": {
-            "ip_address": "集中器 IP",
-            "hide_device_set_bulbs": "隱藏裝置組燈泡"
+            "ip_address": "集中器 IP"
           },
           "description": "請按下 Dirigera 集中器上的動作按鈕，然後按下「送出」。",
           "title": "IKEA Dirigera 集中器設定"

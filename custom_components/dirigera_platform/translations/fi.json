@@ -6,16 +6,14 @@
     "step": {
       "user": {
         "data": {
-          "ip_address": "Keskittimen IP",
-          "hide_device_set_bulbs": "Piilota laiteryhmän lamput"
+          "ip_address": "Keskittimen IP"
         },
         "description": "Anna IKEA Dirigera -keskittimen tiedot",
         "title": "IKEA Dirigera -keskittimen asennus"
       },
       "action": {
         "data": {
-          "ip_address": "Keskittimen IP",
-          "hide_device_set_bulbs": "Piilota laiteryhmän lamput"
+          "ip_address": "Keskittimen IP"
         },
         "description": "Paina Dirigera-keskittimen toimintopainiketta ja paina Lähetä.",
         "title": "IKEA Dirigera -keskittimen asennus"
@@ -31,15 +29,13 @@
         "title": "IKEA Dirigera -keskittimen alusta",
         "data": {
           "ip_address": "Keskittimen IP",
-          "token": "Tunniste",
-          "hide_device_set_bulbs": "Piilota laiteryhmän lamput"
+          "token": "Tunniste"
         },
         "description": "Päivitä IKEA Dirigera -keskittimen asetukset..."
       },
       "action": {
         "data": {
-          "ip_address": "Keskittimen IP",
-          "hide_device_set_bulbs": "Piilota laiteryhmän lamput"
+          "ip_address": "Keskittimen IP"
         },
         "description": "Paina Dirigera-keskittimen toimintopainiketta ja paina Lähetä.",
         "title": "IKEA Dirigera -keskittimen asennus"

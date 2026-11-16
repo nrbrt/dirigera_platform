@@ -102,7 +102,7 @@ Open **Configure** on the integration to change these. Saving no longer asks you
 |--------|---------|--------------|
 | **Platforms to import** | all seven | Which device types get entities. Clearing a platform hides its existing entities and, where a device has nothing left, the device itself. They are disabled rather than deleted, so renames, area assignments and history survive; re-select the platform and they come back with the same entity IDs. A device that still has an entity on a selected platform stays visible, so switching off Sensors does not take a motion sensor or a metering plug with it. Anything you disabled by hand is never touched. |
 | **Skip Matter over Thread devices** | off | Leaves out the devices the hub commissioned over Matter, for when you already import those through the Matter integration. Zigbee devices are unaffected. |
-| **Hide Device Set Bulbs** | on | Hides the hub's bulb groups, which otherwise duplicate the individual lights |
+| **Importing sets of lights** | Sets only (new installs), Sets with lights (existing installs) | How lights in an IKEA device set are imported. **Sets only**: one light per set, as in the IKEA app; the lights in a set are not imported on their own. **Sets with lights**: the set, plus each of its lights. **Lights only**: no sets. Lights that are in no set are imported with every choice. |
 | **Power sensor push throttle** | 60s | Minimum interval between recorder writes for the high-frequency push sensors. This is a floor, not an exact interval. Set 0 to disable. |
 
 ## Bug Reports & Feature Requests

@@ -361,7 +361,6 @@ def light_turn_on_patch(can_receive, kwargs, kelvin_range):
 
 
 class ikea_bulb(LightEntity):
-
     def __init__(self, hub, json_data : Light) -> None:
         logger.debug("ikea_bulb ctor...")
         self._hub = hub
@@ -564,10 +563,16 @@ class ikea_bulb(LightEntity):
             return
         for key, value in values.items():
             setattr(self._json_data.attributes, key, value)
-        # Only while this light is in Home Assistant and enabled: under the
-        # "Sets only" mode it is not, and still gets commands through its set.
-        if self.hass is not None and getattr(self, "enabled", True):
-            self.async_schedule_update_ha_state(False)
+        # Write this light's state, and that of the device set that follows
+        # it: this change does not pass the listener, whose cascade otherwise
+        # updates the set (review of the merge with #76, 16-11-2026). The light
+        # itself only while it is in Home Assistant and enabled; under "Sets
+        # only" it is not, and the set is the only entity that shows it.
+        hub = getattr(self, "_hub", None)
+        entry = hub_event_listener.get_registry_entry(hub.websocket_base_url, self._json_data.id) if hub is not None else None
+        for target in (self, getattr(entry, "cascade_entity", None)):
+            if target is not None and getattr(target, "hass", None) is not None and getattr(target, "enabled", True):
+                target.async_schedule_update_ha_state(False)
 
     async def async_will_remove_from_hass(self):
         self._pending.clear()
@@ -593,10 +598,16 @@ class ikea_bulb(LightEntity):
             raise
         for key, value in self._pending.accepted(command).items():
             setattr(self._json_data.attributes, key, value)
-        # Only while this light is in Home Assistant and enabled: under the
-        # "Sets only" mode it is not, and still gets commands through its set.
-        if self.hass is not None and getattr(self, "enabled", True):
-            self.async_schedule_update_ha_state(False)
+        # Write this light's state, and that of the device set that follows
+        # it: this change does not pass the listener, whose cascade otherwise
+        # updates the set (review of the merge with #76, 16-11-2026). The light
+        # itself only while it is in Home Assistant and enabled; under "Sets
+        # only" it is not, and the set is the only entity that shows it.
+        hub = getattr(self, "_hub", None)
+        entry = hub_event_listener.get_registry_entry(hub.websocket_base_url, self._json_data.id) if hub is not None else None
+        for target in (self, getattr(entry, "cascade_entity", None)):
+            if target is not None and getattr(target, "hass", None) is not None and getattr(target, "enabled", True):
+                target.async_schedule_update_ha_state(False)
 
     async def async_turn_on(self, **kwargs):
         logger.debug("light turn_on...")
@@ -670,7 +681,7 @@ class ikea_bulb_device_set(LightEntity):
             new = hub_event_listener.get_registry_entry(hub_key, bulb.unique_id)
             if new is not None:
                 new.cascade_entity = self
-        if self.hass is not None:
+        if self.hass is not None and getattr(self, "enabled", True):
             self.async_write_ha_state()
 
     @property

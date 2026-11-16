@@ -526,6 +526,10 @@ class hub_event_listener(threading.Thread):
         # One resync at a time: a second reconnect waits for the first resync
         # and then fetches again.
         self._resync_lock = asyncio.Lock()
+        # Ids of lights whose set membership a live event changed while a
+        # resync fetch was on its way; None when no fetch is. The snapshot's
+        # deviceSet for them is older and is left out (review 16-11-2026).
+        self._membership_live = None
         # False until the first WebSocket open; used to tell an initial connect
         # (setup already fetched state) from a reconnect (must re-pull state).
         self._has_opened = False
@@ -1055,6 +1059,8 @@ class hub_event_listener(threading.Thread):
             # disables the light, and Home Assistant warns about a write that
             # reaches an entity after it was disabled.
             manager = self._device_sets() if "deviceSet" in info else None
+            if manager is not None and self._membership_live is not None and not self._resyncing:
+                self._membership_live.add(event_id)
             if manager is not None:
                 self._schedule(
                     manager.async_handle_membership, event_id, info["deviceSet"], entity._json_data.room
@@ -1139,13 +1145,16 @@ class hub_event_listener(threading.Thread):
         they wrote is left out of the snapshot: it is newer (see live_writes).
         A device no event touched gets its whole row."""
         async with self._resync_lock:
+            self._membership_live = set()
             with live_writes() as newer:
                 try:
                     devices = await self._hass.async_add_executor_job(self._hub.get, "/devices")
                 except Exception as ex:
                     logger.warning(f"State resync failed to fetch /devices: {ex}")
+                    self._membership_live = None
                     return
             if not devices:
+                self._membership_live = None
                 return
             self._resyncing = True
             try:
@@ -1155,6 +1164,7 @@ class hub_event_listener(threading.Thread):
                 logger.info(f"State resync applied for {len(devices)} devices after reconnect")
             finally:
                 self._resyncing = False
+                self._membership_live = None
             # Queued behind the membership updates of the replay (#76): a set
             # no light is in any more was deleted while we were disconnected.
             manager = self._device_sets()
@@ -1169,6 +1179,8 @@ class hub_event_listener(threading.Thread):
         snapshot was asked for."""
         if not isinstance(device, dict) or "id" not in device:
             return device
+        if self._membership_live and device["id"] in self._membership_live and "deviceSet" in device:
+            device = {key: value for key, value in device.items() if key != "deviceSet"}
         entry = self._own_registry().get(self._registered_id(
             device["id"], device.get("deviceType", device.get("type"))))
         if entry is None:

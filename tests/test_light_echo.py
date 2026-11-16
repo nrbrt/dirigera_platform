@@ -98,6 +98,7 @@ def _load_bulb():
         "registry_entry": hel.registry_entry,
         "to_snake_case": hel.to_snake_case,
         "PendingCommand": getattr(pc, "PendingCommand", None),
+        "asyncio": asyncio,
     }
     exec(compile(ast.fix_missing_locations(ast.Module(body=nodes, type_ignores=[])), LIGHT, "exec"), ns)
     return ns["ikea_bulb"]
@@ -536,3 +537,39 @@ def test_scene_action_changes_the_colour_mode(setup):
         {"type": "device", "deviceId": "b1", "attributes": {"colorTemperature": 2700}},
     ]}})
     assert bulb.color_mode == ColorMode.COLOR_TEMP
+
+
+# --- review of the merge with #76 (16-11-2026) --------------------------------
+
+class _FakeSet:
+    hass = object()
+    enabled = True
+    unique_id = "set1"
+
+    def __init__(self):
+        self.pushed = 0
+
+    def async_schedule_update_ha_state(self, force_refresh=False):
+        self.pushed += 1
+
+
+@pytest.mark.parametrize("in_ha", [True, False], ids=["light-in-ha", "sets-only"])
+def test_the_set_follows_when_a_command_window_ends(setup, monkeypatch, in_ha):
+    """A value the hub reported during a command's window stands when the
+    window ends unconfirmed. The set that follows the light must show it too;
+    under "Sets only" the set is the only entity that does. Found by the
+    adversarial review: the set kept the commanded value."""
+    monkeypatch.setattr(pc, "ECHO_WINDOW_S", 0.05)
+    monkeypatch.setattr(pc, "_now", __import__("time").monotonic)
+    bulb = setup.bulb(light_level=30)
+    if not in_ha:
+        bulb.hass = None
+    device_set = _FakeSet()
+    L.get_registry_entry(HUB_KEY, "b1").cascade_entity = device_set
+    setup.run(bulb.async_turn_on(brightness=128))
+    assert _level(bulb) == 50
+    setup.hub_says(lightLevel=20)          # a remote, right after the command
+    before = device_set.pushed
+    setup.run(asyncio.sleep(0.2))          # the window ends, 20 stands
+    assert _level(bulb) == 20
+    assert device_set.pushed - before == 1

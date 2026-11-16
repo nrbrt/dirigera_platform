@@ -60,6 +60,8 @@ def _load():
         "DOMAIN": "dirigera_platform",
         "logger": logging.getLogger(__name__),
         "writer_for": hub_writer.writer_for,
+        # _send also writes the device set that follows the light (merge with #76)
+        "hub_event_listener": SimpleNamespace(get_registry_entry=lambda hub_key, light_id: None),
     }
     exec(compile(ast.fix_missing_locations(ast.Module(body=funcs + methods, type_ignores=[])), LIGHT, "exec"), ns)
     return ns

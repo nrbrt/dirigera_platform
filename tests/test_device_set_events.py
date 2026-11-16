@@ -103,7 +103,6 @@ class FakeBulb:
         # What Home Assistant sets: hass once added, enabled from the registry.
         self.hass = object() if added else None
         self.enabled = True
-        self.should_ignore_update = False
         self.brightness = 128
         self.supported_color_modes = {"color_temp"}
         self.color_mode = "color_temp"
@@ -572,3 +571,69 @@ def test_an_entity_is_handed_to_home_assistant_only_once():
     world.manager.async_handle_membership("c", [], None)
     ids = world.added_ids()
     assert len(ids) == len(set(ids))
+
+
+# --- review of the merge with #76 (16-11-2026) --------------------------------
+
+from test_light_color_temp_range import _light_lib, _hub_lib, needs_dirigera  # noqa: E402
+
+
+def _real_light(light_id, set_id=None):
+    return _light_lib.dict_to_light({
+        "id": light_id, "type": "light", "deviceType": "light",
+        "createdAt": "2026-01-01T00:00:00.000Z", "lastSeen": "2026-01-01T00:00:00.000Z",
+        "isReachable": True, "customIcon": "lighting_bulb", "isHidden": False,
+        "capabilities": {"canSend": [], "canReceive": ["isOn", "lightLevel"]},
+        "room": None, "deviceSet": [{"id": set_id, "name": set_id}] if set_id else [],
+        "remoteLinks": [],
+        "attributes": {
+            "customName": "Bulb", "model": "m", "manufacturer": "IKEA",
+            "firmwareVersion": "1", "hardwareVersion": "1", "serialNumber": "1",
+            "productCode": "p", "isOn": True, "lightLevel": 50,
+        },
+    }, _hub_lib.FakeDirigeraHub())
+
+
+@needs_dirigera
+def test_reachability_alone_of_a_hidden_controller_reaches_its_set():
+    """The two tests above send an attribute because their fake model is no
+    pydantic model. With the library's real model a reachability-only event
+    is applied, and the set (whose availability follows its controller) is
+    written, the hidden light itself not."""
+    listener = _listener()
+    bulb = FakeBulb("a", "kitchen")
+    bulb._json_data = _real_light("a", "kitchen")
+    device_set = FakeSet()
+    hub_event_listener.get_registry_entry(HUB_KEY, "a").cascade_entity = device_set
+
+    _send(listener, "deviceStateChanged", {"id": "a", "deviceType": "light", "isReachable": False})
+
+    assert bulb._json_data.is_reachable is False
+    assert bulb.pushed == 0
+    assert device_set.pushed == 1
+
+
+def test_a_join_during_the_resync_fetch_is_not_undone_by_the_older_snapshot():
+    """A light joins a set while the resync fetches /devices. The snapshot is
+    older and still says deviceSet []; replaying it would make the light leave,
+    and the prune after the replay would delete the set."""
+    spy = Spy()
+    joined = [{"id": "s1", "name": "Spots", "icon": "x"}]
+    holder = {}
+
+    def fetch(path):
+        # The live event arrives while the fetch is on its way.
+        _send(holder["listener"], "deviceStateChanged", {
+            "id": "a", "deviceType": "light", "attributes": {}, "deviceSet": joined,
+        })
+        return [{"id": "a", "type": "light", "deviceType": "light", "attributes": {}, "deviceSet": []}]
+
+    listener = _listener(spy)
+    listener._hub.get = fetch
+    holder["listener"] = listener
+    FakeBulb("a", added=True)
+
+    asyncio.get_event_loop().run_until_complete(listener._resync_all_states())
+
+    memberships = [args[1] for name, args in spy.calls if name == "async_handle_membership"]
+    assert memberships == [joined], memberships

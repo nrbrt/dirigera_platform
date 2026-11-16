@@ -62,6 +62,7 @@ def _load():
         "writer_for": hub_writer.writer_for,
         # _send also writes the device set that follows the light (merge with #76)
         "hub_event_listener": SimpleNamespace(get_registry_entry=lambda hub_key, light_id: None),
+        "asyncio": asyncio,
     }
     exec(compile(ast.fix_missing_locations(ast.Module(body=funcs + methods, type_ignores=[])), LIGHT, "exec"), ns)
     return ns
@@ -217,21 +218,39 @@ def _run(hub, command):
     asyncio.run(main())
 
 
-def test_turn_on_sends_one_patch_and_updates_the_model():
+def test_turn_on_from_off_sends_the_level_in_a_second_patch_and_updates_the_model():
+    """From off the bulb takes a lightLevel only once it is on (live hub,
+    16-11-2026: in the same PATCH it ended part-way, 3 of 3; ~1 s later it
+    was right, 3 of 3). Colour goes with isOn, the level after."""
     hub = _Hub()
     bulb = _bulb(hub)
+    assert bulb._json_data.attributes.is_on is False
     _run(hub, NS["async_turn_on"](bulb, brightness=115, hs_color=(120.0, 80.0)))
-    assert hub.sent == [("/devices/bulb-1", [
-        {"attributes": {"isOn": True}},
-        {"attributes": {"colorHue": 120.0, "colorSaturation": 0.8}},
-        {"attributes": {"lightLevel": 45}},
-    ])]
+    assert hub.sent == [
+        ("/devices/bulb-1", [
+            {"attributes": {"isOn": True}},
+            {"attributes": {"colorHue": 120.0, "colorSaturation": 0.8}},
+        ]),
+        ("/devices/bulb-1", [{"attributes": {"lightLevel": 45}}]),
+    ]
     a = bulb._json_data.attributes
     # The model assumes what the hub will report, not what was sent.
     assert (a.is_on, a.light_level, a.color_mode) == (True, 45, "color")
     assert (a.color_hue, a.color_saturation) == (21845 * 360 / 65536, 203 / 254)
     # What was sent is kept until the hub confirms it (test_light_echo.py).
     assert bulb._pending.holds_back("light_level", 10) is True
+
+
+def test_turn_on_while_on_is_one_patch():
+    hub = _Hub()
+    bulb = _bulb(hub)
+    bulb._json_data.attributes.is_on = True
+    _run(hub, NS["async_turn_on"](bulb, brightness=115, hs_color=(120.0, 80.0)))
+    assert hub.sent == [("/devices/bulb-1", [
+        {"attributes": {"isOn": True}},
+        {"attributes": {"colorHue": 120.0, "colorSaturation": 0.8}},
+        {"attributes": {"lightLevel": 45}},
+    ])]
 
 
 def test_plain_turn_on():

@@ -622,8 +622,23 @@ class ikea_bulb(LightEntity):
                 kwargs,
                 (self.min_color_temp_kelvin, self.max_color_temp_kelvin),
             )
-            logger.debug(f"PATCH {self._json_data.id}: {data}")
+            # A bulb that is off takes a lightLevel only once it is on. Sent
+            # straight after isOn (same PATCH, or right after the hub reports
+            # the bulb on, ~0.34 s), the level ends part-way: asked 30, got
+            # 50, 3 of 3 runs and 6 of 6 after the on-event (live hub,
+            # 16-11-2026, TRADFRI). Measured from the start of the on-PATCH:
+            # 0.45 s 0 of 3 right, 0.60 s 2 of 3, 0.75 s and 1.0 s 3 of 3.
+            # So from off the level goes in a second PATCH, ~1 s after the
+            # first. The wait is outside the hub's writer: other bulbs are
+            # not held up. Colour from off was right in one PATCH.
+            level_after = None
+            if not self._json_data.attributes.is_on and len(data) > 1 and "lightLevel" in data[-1]["attributes"]:
+                level_after = ([data.pop()], {"light_level": updates.pop("light_level")})
+            logger.debug(f"PATCH {self._json_data.id}: {data}" + (f" then {level_after[0]}" if level_after else ""))
             await self._send(data, updates)
+            if level_after is not None:
+                await asyncio.sleep(0.8)  # the on-PATCH itself took ~0.25 s
+                await self._send(*level_after)
         except Exception as ex:
             logger.error("error encountered turning on : {}".format(self.name))
             logger.error(ex)

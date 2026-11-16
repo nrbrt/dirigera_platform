@@ -239,13 +239,16 @@ def test_room_change_moves_the_device_to_that_area():
     assert entity.writes == 1
 
 
-def test_room_renamed_on_the_hub_reaches_the_model_and_the_area():
-    # Same room id, new name: the id-only comparison kept the old Room.
+def test_room_renamed_on_the_hub_reaches_the_model_and_is_no_room_change():
+    # Same room id, new name: the model takes the new name (an id-only
+    # comparison of the fields kept the old Room), but it is the same room,
+    # so this is not the room-change path. Which devices follow a rename is
+    # decided against the last known room name; tests_ha/test_areas.py.
     entity = _Entity(_device(room=HAL))
     s = _setup(entity)
     _send(s.listener, "d_1", room={**HAL, "name": "Gang"})
     assert entity._json_data.room.name == "Gang"
-    assert s.areas == [("d_1", "Gang")]
+    assert s.areas == []
 
 
 def test_unchanged_room_does_not_touch_the_area():

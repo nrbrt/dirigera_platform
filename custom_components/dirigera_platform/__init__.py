@@ -20,6 +20,7 @@ from homeassistant.const import CONF_IP_ADDRESS, CONF_TOKEN, Platform
 from homeassistant.core import HomeAssistant
 import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers import device_registry as dr, entity_registry as er
+from homeassistant.helpers.storage import Store
 
 from .const import (
     DOMAIN,
@@ -30,6 +31,8 @@ from .const import (
     DEFAULT_EXCLUDE_MATTER,
     PLATFORM,
     DISCOVERY_COORDINATOR,
+    ROOMS_STORE_VERSION,
+    rooms_store_key,
 )
 from .hub_event_listener import hub_event_listener
 from .hub_writer import start_hub_writer
@@ -333,18 +336,26 @@ async def async_setup_entry(
     if not sets_wanted(device_set_mode):
         hidden_lights |= _device_set_entity_ids(hass, entry)
     sync_platform_entity_registry(hass, entry, platforms, hidden_lights)
+    # The devices that exist before the platforms set up, for the area sync:
+    # it tells new devices from known ones (see sync_all_device_areas).
+    devices_before_setup = frozenset(
+        device.id for device in dr.async_entries_for_config_entry(dr.async_get(hass), entry.entry_id))
     await hass.config_entries.async_forward_entry_setups(entry, platforms)
 
     # Now lets start the event listener
     hub_basic = Hub(hass_data[CONF_TOKEN], hass_data[CONF_IP_ADDRESS])
 
-    hub_events = hub_event_listener(hub_basic, hass, discovery, entry.entry_id)
+    hub_events = hub_event_listener(
+        hub_basic, hass, discovery, entry.entry_id,
+        rooms_store=Store(hass, ROOMS_STORE_VERSION, rooms_store_key(entry.entry_id)),
+    )
     hub_events.start()
     try:
-        # Sync device names and areas from Dirigera to HA device registry
-        # This ensures names and areas are set correctly after HA restart
+        # Bring renames and room moves made in the IKEA app while Home
+        # Assistant was stopped into the device registry. Neither touches what
+        # the user set in Home Assistant (#72 and its area follow-up).
         await hub_events.sync_all_device_names()
-        await hub_events.sync_all_device_areas()
+        await hub_events.sync_all_device_areas(devices_before_setup)
     except Exception:
         # Setup is about to fail — without this, the listener thread kept
         # running and every ConfigEntryNotReady retry started another one.
@@ -478,3 +489,8 @@ async def _async_remove_excluded_matter_devices(hass, entry, hass_data) -> list[
         device_reg.async_update_device(device.id, remove_config_entry_id=entry.entry_id)
         removed.append(device.id)
     return removed
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: config_entries.ConfigEntry) -> None:
+    """Delete what this entry stored outside the registries: the rooms last seen on its hub."""
+    await Store(hass, ROOMS_STORE_VERSION, rooms_store_key(entry.entry_id)).async_remove()

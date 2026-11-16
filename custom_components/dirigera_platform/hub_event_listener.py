@@ -381,15 +381,24 @@ def _apply_device_fields(entity, info, own_device=True):
     return _write_fields(entity, model, fields)
 
 
+def _room_of(data) -> tuple[str, str]:
+    """(id, name) of the device's room on the hub; ("", "") without one.
+
+    A room is the same room by its id: renaming it in the IKEA app keeps
+    the id, and must not move devices."""
+    room = getattr(data, "room", None)
+    return (room.id, room.name) if room is not None else ("", "")
+
+
 def _device_view(entity):
     """What of a device the listener acts on when it changes: every model field
-    but the attributes (a dict of field values), the name of its room and its
+    but the attributes (a dict of field values), the id of its room and its
     name on the hub."""
     data = entity._json_data
     fields = getattr(type(data), "model_fields", None) or ()
     return (
         {name: getattr(data, name, None) for name in fields if name != "attributes"},
-        getattr(getattr(data, "room", None), "name", None),
+        _room_of(data)[0],
         getattr(getattr(data, "attributes", None), "custom_name", None),
     )
 
@@ -504,7 +513,7 @@ class hub_event_listener(threading.Thread):
     # single pass with a short trailing-edge debounce.
     STALE_RECHECK_DEBOUNCE = 2.0  # seconds
 
-    def __init__(self, hub : Hub, hass, discovery_coordinator=None, config_entry_id=None):
+    def __init__(self, hub : Hub, hass, discovery_coordinator=None, config_entry_id=None, rooms_store=None):
         super().__init__()
         # Scopes device-registry lookups to this hub's entry (#52).
         self._config_entry_id = config_entry_id
@@ -536,42 +545,61 @@ class hub_event_listener(threading.Thread):
         # True while a coalesced stale-device recheck is already pending, so a
         # burst of deviceRemoved events settles into one reconciliation.
         self._stale_check_pending = False
+        # The id of the hub room each device was last seen in, per Home
+        # Assistant device identifier, kept across restarts in rooms_store (a
+        # Home Assistant Store, made by setup). See sync_all_device_areas.
+        # Without a store (unit tests) nothing is remembered.
+        self._rooms_seen: dict[str, str] = {}
+        # The last known name of each hub room, by room id: a rename moves the
+        # devices still in the area named after the old name.
+        self._room_names: dict[str, str] = {}
+        self._rooms_store = rooms_store
 
-    async def _update_device_area(self, device_id: str, room_name: str):
-        """Update the device's area in Home Assistant's device registry if needed."""
+    def _update_device_area(self, device_id: str, room_name: str):
+        """Follow a room change on the hub for one device (see _set_device_area).
+
+        Runs inside the event handler: a failing lookup is logged here, so the
+        rest of the event (state, name, the stored room) still goes through."""
         try:
             device_reg = dr.async_get(self._hass)
-            area_reg = ar.async_get(self._hass)
-
-            # Find the device entry
             device_entry = get_device_by_identifier(
                 device_reg, ("dirigera_platform", device_id), self._config_entry_id
             )
-            if device_entry is None:
-                logger.debug(f"Device {device_id} not found in HA device registry")
-                return
+        except Exception as ex:
+            logger.error(f"Failed to look up device {device_id} for its area: {ex}")
+            return
+        if device_entry is None:
+            logger.debug(f"Device {device_id} not found in HA device registry")
+            return
+        self._set_device_area(device_reg, device_entry, device_id, room_name)
 
-            if room_name == "":
-                # Remove area assignment if currently set
-                if device_entry.area_id is not None:
-                    logger.info(f"Removing area assignment from device {device_id}")
-                    device_reg.async_update_device(device_entry.id, area_id=None)
-            else:
-                # Find or create the area
-                area_entry = area_reg.async_get_area_by_name(room_name)
-                if area_entry is None:
-                    # Create the area if it doesn't exist
-                    logger.info(f"Creating new area: {room_name}")
-                    area_entry = area_reg.async_create(room_name)
+    def _set_device_area(self, device_reg, device_entry, device_id: str, room_name: str) -> bool:
+        """Put a device in the area named after its hub room; no room clears its area.
 
-                # Only update if different
-                if device_entry.area_id != area_entry.id:
-                    logger.info(f"Updating device {device_id} area to {room_name}")
-                    device_reg.async_update_device(device_entry.id, area_id=area_entry.id)
-                else:
-                    logger.debug(f"Device {device_id} already in area {room_name}")
+        Creates the area when there is none by that name. Only for a new
+        device or a room that changed on the hub: otherwise the area is the
+        user's (see sync_all_device_areas). Returns whether the device moved.
+        """
+        try:
+            if not room_name:
+                if device_entry.area_id is None:
+                    return False
+                logger.info(f"Removing area assignment from device {device_id}")
+                device_reg.async_update_device(device_entry.id, area_id=None)
+                return True
+            area_reg = ar.async_get(self._hass)
+            area_entry = area_reg.async_get_area_by_name(room_name)
+            if area_entry is None:
+                logger.info(f"Creating new area: {room_name}")
+                area_entry = area_reg.async_create(room_name)
+            if device_entry.area_id == area_entry.id:
+                return False
+            logger.info(f"Updating device {device_id} area to {room_name}")
+            device_reg.async_update_device(device_entry.id, area_id=area_entry.id)
+            return True
         except Exception as ex:
             logger.error(f"Failed to update device area for {device_id}: {ex}")
+            return False
 
     async def _update_device_name(self, device_id: str, new_name: str):
         """Keep the device's own name in step with its name on the hub.
@@ -639,27 +667,144 @@ class hub_event_listener(threading.Thread):
                 logger.error(f"Failed to sync name for device {device_id}: {ex}")
         logger.info(f"Device name sync complete, synced {synced_count} devices")
 
-    async def sync_all_device_areas(self):
-        """Sync all device areas from Dirigera room info to HA device registry.
+    async def sync_all_device_areas(self, devices_before_setup: frozenset[str]):
+        """Put new devices in their hub room, and move a known one only when its room on the hub changed.
 
-        This should be called at startup after all entities are registered,
-        to ensure HA device areas match Dirigera rooms.
+        The area of a device belongs to the user. Up to and including
+        0.4.1b1 every start put each device back in its IKEA room and created
+        that area if it was gone, so a deleted area came back and a device
+        moved to another area in Home Assistant moved back after every
+        restart. Now the area only follows the hub when the room on the hub
+        changes, the same rule the live room event follows; that needs the
+        room each device was last seen in, so it is stored per hub entry.
+
+        - A new device without an area goes to its hub room. New means
+          created by this setup (its registry id is not in
+          devices_before_setup), or not in a store that already existed: a
+          device paired while Home Assistant ran is placed at the next
+          start. suggested_area is not enough: the hub keeps the room of a
+          split device on one part only, and whichever part registers first
+          decides (MYGGSPRAY). Known limit: an area the user cleared on a
+          device paired while Home Assistant ran, before the next start, is
+          set once more at that start. Placing it when its registry entry is
+          created would avoid that, but is not worth building before 0.5,
+          where the room becomes a property of the whole device (RFC #77).
+        - A known device moves when its hub room differs from the stored one
+          (moved in the IKEA app while Home Assistant was stopped).
+        - A room renamed in the IKEA app is the same room (same id): a device
+          still in the area named after the old name follows to an area with
+          the new name; a device the user put in another area stays.
+        - Without a store yet (the first start of this version) a known
+          device only has its room recorded.
+
+        A device missing from the hub for a while keeps its stored room; one
+        that is gone from the device registry is forgotten. A room first seen
+        live (a device paired while Home Assistant runs) is recorded at the
+        next start; a rename of it before then is not followed.
         """
-        logger.info("Starting device area sync from Dirigera rooms")
-        synced_count = 0
-        for device_id, registry_entry in self._own_registry().items():
-            try:
-                entity = registry_entry.entity
-                if not hasattr(entity, '_json_data'):
+        stored = await self._load_rooms()
+        stored_devices = stored["devices"] if stored is not None else None
+        stored_names = stored["room_names"] if stored is not None else {}
+        rooms: dict[str, tuple[str, str]] = {}
+        for registry_entry in self._own_registry().values():
+            data = getattr(registry_entry.entity, "_json_data", None)
+            if data is None:
+                continue
+            identifier = data.relation_id or data.id
+            # Over all parts: the hub keeps the room on one part of a split device.
+            room = _room_of(data)
+            if room[0] or identifier not in rooms:
+                rooms[identifier] = room
+
+        device_reg = dr.async_get(self._hass)
+        remembered = dict(stored_devices or {})
+        placed = moved = 0
+        for identifier, (room_id, room_name) in rooms.items():
+            device_entry = get_device_by_identifier(
+                device_reg, ("dirigera_platform", identifier), self._config_entry_id)
+            if device_entry is None:
+                continue
+            is_new = device_entry.id not in devices_before_setup or (
+                stored_devices is not None and identifier not in stored_devices)
+            if is_new:
+                if room_id and device_entry.area_id is None:
+                    placed += self._set_device_area(device_reg, device_entry, identifier, room_name)
+            elif stored_devices is not None and stored_devices[identifier] != room_id:
+                logger.debug(f"Room of {identifier} changed from {stored_devices[identifier]!r} to {room_id!r} while stopped")
+                moved += self._set_device_area(device_reg, device_entry, identifier, room_name)
+            else:
+                moved += self._follow_rename(device_reg, device_entry, identifier,
+                                             stored_names.get(room_id), room_name)
+            remembered[identifier] = room_id
+
+        in_registry = {
+            ident for device in dr.async_entries_for_config_entry(device_reg, self._config_entry_id)
+            for domain, ident in device.identifiers if domain == "dirigera_platform"}
+        self._rooms_seen = {i: r for i, r in remembered.items() if i in in_registry}
+        names = {**stored_names, **{room_id: name for room_id, name in rooms.values() if room_id}}
+        self._room_names = {r: names[r] for r in set(self._rooms_seen.values()) if r in names}
+        if self._rooms_store is not None:
+            await self._rooms_store.async_save(self._rooms_data())
+        logger.info(f"Device area sync complete: {len(rooms)} devices, {placed} new placed, "
+                    f"{moved} moved to a changed or renamed hub room")
+
+    def _follow_rename(self, device_reg, device_entry, device_id: str, old_name: str | None, new_name: str) -> bool:
+        """Move a device to the area of its renamed room when it is still in the
+        area named after the old name. Returns whether it moved."""
+        if not old_name or not new_name or old_name == new_name or device_entry.area_id is None:
+            return False
+        old_area = ar.async_get(self._hass).async_get_area_by_name(old_name)
+        if old_area is None or old_area.id != device_entry.area_id:
+            return False
+        logger.debug(f"Room of {device_id} renamed from {old_name!r} to {new_name!r}")
+        return self._set_device_area(device_reg, device_entry, device_id, new_name)
+
+    def _room_renamed(self, room_id: str, new_name: str) -> None:
+        """A live event shows a known room under a new name: every device of
+        that room still in the area named after the old name follows."""
+        old_name = self._room_names.get(room_id)
+        self._room_names[room_id] = new_name
+        try:
+            device_reg = dr.async_get(self._hass)
+            for device_id, device_room in self._rooms_seen.items():
+                if device_room != room_id:
                     continue
-                if entity._json_data.room is not None:
-                    room_name = entity._json_data.room.name
-                    identifier = entity._json_data.relation_id or entity._json_data.id
-                    await self._update_device_area(identifier, room_name)
-                    synced_count += 1
-            except Exception as ex:
-                logger.error(f"Failed to sync area for device {device_id}: {ex}")
-        logger.info(f"Device area sync complete, processed {synced_count} devices with rooms")
+                device_entry = get_device_by_identifier(
+                    device_reg, ("dirigera_platform", device_id), self._config_entry_id)
+                if device_entry is not None:
+                    self._follow_rename(device_reg, device_entry, device_id, old_name, new_name)
+        except Exception as ex:
+            logger.error(f"Failed to follow the rename of room {room_id}: {ex}")
+        self._save_rooms()
+
+    def _rooms_data(self) -> dict:
+        return {"devices": dict(self._rooms_seen), "room_names": dict(self._room_names)}
+
+    def _save_rooms(self) -> None:
+        """Written at once as a tracked task, not as a delayed save: a reload
+        does not wait for a pending delayed write, so it would read the old
+        room and move the device back. Room changes are rare."""
+        if self._rooms_store is not None:
+            self._hass.async_create_task(self._rooms_store.async_save(self._rooms_data()))
+
+    async def _load_rooms(self) -> dict | None:
+        """The stored rooms ({"devices": ..., "room_names": ...}); None without a
+        store yet, or when it cannot be used (then nothing is moved, as on the
+        first start of this version, and the store is rewritten)."""
+        if self._rooms_store is None:
+            return None
+        try:
+            data = await self._rooms_store.async_load()
+        except Exception as ex:
+            logger.warning(f"Could not read the stored rooms, moving no device this start; they are rewritten: {ex}")
+            return None
+        if data is None:
+            return None
+        if not (isinstance(data, dict) and isinstance(data.get("devices"), dict)
+                and isinstance(data.get("room_names"), dict)):
+            logger.warning("Stored rooms are not in the expected form, moving no device this start; they are rewritten")
+            return None
+        return data
 
     def on_error(self, ws:Any, ws_msg:str):
         logger.debug(f"on_error hub event listener {ws_msg}")
@@ -1028,10 +1173,26 @@ class hub_event_listener(threading.Thread):
                 # The Home Assistant area follows the room on the hub when the
                 # room changes, and only then: a user may keep a device in
                 # another area, and every reconnect replays every room.
-                logger.debug(f"Room of {id} changed from {room_before} to {room_after}")
-                self._hass.async_create_task(
-                    self._update_device_area(ha_device, room_after or "")
-                )
+                logger.debug(f"Room of {id} changed from {room_before!r} to {room_after!r}")
+                room_name = _room_of(entity._json_data)[1]
+                if room_after and self._room_names.get(room_after, room_name) != room_name:
+                    # Moved into a room that was renamed as well: its other
+                    # devices follow the rename first.
+                    self._room_renamed(room_after, room_name)
+                self._update_device_area(ha_device, room_name)
+                self._rooms_seen[ha_device] = room_after
+                if room_after:
+                    self._room_names[room_after] = room_name
+                self._save_rooms()
+            elif room_after and info.get("room") is not None:
+                # Same room, and this event carries it: renamed in the IKEA
+                # app when its name differs from the one last seen. Only an
+                # event with the room counts: the model of a room-mate whose
+                # event has not come yet still holds the old name, and would
+                # read as a rename back (review 16-11).
+                room_name = _room_of(entity._json_data)[1]
+                if self._room_names.get(room_after, room_name) != room_name:
+                    self._room_renamed(room_after, room_name)
 
             if name_after != name_before and name_after is not None:
                 self._hass.async_create_task(

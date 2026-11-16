@@ -108,3 +108,12 @@ PLATFORM_LABELS = {
     "fan": "Air purifiers",
     "scene": "Scenes",
 }
+
+# The id of the hub room each device was last seen in, per config entry, so a restart
+# only moves a device whose room changed on the hub (see
+# hub_event_listener.sync_all_device_areas).
+ROOMS_STORE_VERSION = 1
+
+
+def rooms_store_key(entry_id: str) -> str:
+    return f"{DOMAIN}.{entry_id}.rooms"

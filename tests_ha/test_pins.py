@@ -9,9 +9,9 @@ Sections of a pin file:
 
 - ``hub_ids``: per hub id, what a hub event for that id changes in Home
   Assistant (entity states, device names and areas): when its reachability
-  flips, when the hub gives it another name, and when one value typical of its
-  type changes, measured from reachable. Then the device is put back and checked to be back. A
-  regrouping in 0.5 reads here as one line per hub id.
+  flips, when the hub gives it another name, and when one value typical of
+  its type changes, measured from reachable. Then the device is put back and
+  checked to be back. A regrouping in 0.5 reads here as one line per hub id.
 - ``entities``: per ``domain|unique_id``: entity_id, name, device, category,
   unit, disabled/hidden.
 - ``devices``: per device identifier: name, area, model, versions, via.
@@ -23,25 +23,35 @@ Sections of a pin file:
 - ``hub_writes``: what setup wrote to the hub.
 - ``unknown_hub_routes``: reads the fake hub could not answer.
 
-Everything is observed through Home Assistant and the hub's message entry
-point, not through the integration's internals, which 0.5 rewrites. Entities
-and devices are read after the events, so an event that renames or moves a
-device shows up. The push throttle is off (0 s), so a write is not held back by
-a write of another part just before it.
+What is pinned is read from Home Assistant; hub messages go in through the
+listener's message entry point (see conftest.py, the one place that touches
+the integration's internals). Entities and devices are read after the events,
+so an event that renames or moves a device shows up. The push throttle is off,
+so a write is not held back by a write of another part just before it.
 
 The pins record what the integration DOES, not what it should do: a known
 oddity stays pinned until a change fixes it on purpose, and then the pin file
-is regenerated in the same commit so the difference is reviewed.
-
-Regenerate: PIN_UPDATE=1 (see conftest.py for how to run).
+is regenerated (``--pin-update``) in the same commit so the difference is
+reviewed. A new fixture in fixtures/ is picked up by itself, once per device
+set mode.
 """
 from __future__ import annotations
 
 import json
-import os
 import re
 from pathlib import Path
+from typing import NamedTuple
+
 import pytest
+from conftest import (
+    FIXTURES,
+    REMOTE_EVENT,
+    deliver,
+    device_identifier,
+    hub_device_of,
+    listener_registrations_left,
+)
+from homeassistant.const import CONF_IP_ADDRESS, CONF_TOKEN
 from homeassistant.helpers import area_registry as ar
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
@@ -49,38 +59,72 @@ from homeassistant.util import slugify
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.dirigera_platform import device_trigger
-from custom_components.dirigera_platform.const import CONF_DEVICE_SET_MODE, DOMAIN
+from custom_components.dirigera_platform.const import (
+    CONF_DEVICE_SET_MODE,
+    CONF_POWER_PUSH_THROTTLE,
+    DEVICE_SET_MODE_LIGHTS_ONLY,
+    DEVICE_SET_MODE_SETS_ONLY,
+    DOMAIN,
+)
 
 PINS = Path(__file__).parent / "pins"
+
+HUB_IP = "192.0.2.1"  # TEST-NET-1: never a real hub
+ENTRY_DATA = {CONF_IP_ADDRESS: HUB_IP, CONF_TOKEN: "pintest-token", CONF_POWER_PUSH_THROTTLE: 0}
+
+# Device set modes. An entry without one was created before the option
+# existed and keeps the legacy behaviour (sets with lights).
+MODES = {
+    "legacy": {},
+    "sets_only": {CONF_DEVICE_SET_MODE: DEVICE_SET_MODE_SETS_ONLY},
+    "lights_only": {CONF_DEVICE_SET_MODE: DEVICE_SET_MODE_LIGHTS_ONLY},
+}
+CASES = [(fixture.stem, mode) for fixture in sorted(FIXTURES.glob("*.json")) for mode in MODES]
+
+
+def _pin_name(fixture: str, mode: str) -> str:
+    return f"{fixture}__{mode}"
 
 CONTROLLER_TYPES = {"genericSwitch", "lightController", "blindsController", "shortcutController"}
 CLICK_PATTERNS = ("singlePress", "longPress", "doublePress")
 BUTTON_TYPE = re.compile(r"^button(\d+)_")
 PRESS_TIME = "2026-01-01T00:00:00Z"
-ENTRY_DATA = {"ip_address": "192.0.2.1", "token": "pintest-token", "power_push_throttle_seconds": 0}
 
-# One value per device type that a hub event changes: (attribute, how).
+
+def _flip(value):
+    return not value
+
+
+def _up(value):
+    return value + 1
+
+
+def _down(value):
+    return value - 1
+
+
+# Per device type: one attribute a hub event changes, and how.
 PROBES = {
-    "light": ("isOn", "flip"),
-    "outlet": ("isOn", "flip"),
-    "occupancySensor": ("isDetected", "flip"),
-    "openCloseSensor": ("isOpen", "flip"),
-    "waterSensor": ("waterLeakDetected", "flip"),
-    "lightSensor": ("illuminance", "up"),
-    "environmentSensor": ("currentTemperature", "up"),
+    "light": ("isOn", _flip),
+    "outlet": ("isOn", _flip),
+    "occupancySensor": ("isDetected", _flip),
+    "openCloseSensor": ("isOpen", _flip),
+    "waterSensor": ("waterLeakDetected", _flip),
+    "lightSensor": ("illuminance", _up),
+    "environmentSensor": ("currentTemperature", _up),
     # Not the power: with the plug off the integration clamps that to 0 W (#36).
-    "electricalSensor": ("totalEnergyConsumed", "up"),
-    "genericSwitch": ("batteryPercentage", "down"),
-    "lightController": ("batteryPercentage", "down"),
+    "electricalSensor": ("totalEnergyConsumed", _up),
+    "genericSwitch": ("batteryPercentage", _down),
+    "lightController": ("batteryPercentage", _down),
 }
+# Types with nothing to probe. Any other type without a probe is pinned as
+# "NO PROBE", so a fixture with a new device type shows the gap in its pins.
+UNPROBED = {"gateway"}
 
-# (fixture, label, entry data on top of ip/token). An entry without a device
-# set mode was created before the option existed: the legacy "sets with lights".
-CASES = [
-    ("hub_norbert", "legacy", {}),
-    ("hub_norbert", "sets_only", {CONF_DEVICE_SET_MODE: "sets_only"}),
-    ("hub_norbert", "lights_only", {CONF_DEVICE_SET_MODE: "lights_only"}),
-]
+
+class Snapshot(NamedTuple):
+    state: str
+    attributes: dict
 
 
 def _ident(device) -> str | None:
@@ -89,36 +133,41 @@ def _ident(device) -> str | None:
     return ",".join(sorted(f"{d}:{i}" for d, i in device.identifiers))
 
 
-def _room(hub_device) -> str | None:
+def _entity_key(reg_entry) -> str:
+    return f"{reg_entry.domain}|{reg_entry.unique_id}"
+
+
+def _room(hub_device: dict) -> str | None:
     return (hub_device.get("room") or {}).get("name")
 
 
-def _flag(value) -> str | None:
+def _enum_str(value) -> str | None:
     return str(value) if value else None
 
 
 class Pinner:
-    """Collects the pins of one set-up entry."""
+    """Collects the pins of one set-up config entry."""
 
-    def __init__(self, hass, entry, hub, listener):
-        self.hass, self.entry, self.hub, self.listener = hass, entry, hub, listener
+    def __init__(self, hass, config_entry, hub, listener):
+        self.hass, self.config_entry, self.hub, self.listener = hass, config_entry, hub, listener
         self.ent_reg = er.async_get(hass)
         self.dev_reg = dr.async_get(hass)
         self.area_reg = ar.async_get(hass)
         self.area_slugs = sorted({slugify(_room(d)) for d in hub.devices if _room(d)}, key=len, reverse=True)
-        self.remote_ids = [d["id"] for d in hub.devices if d.get("deviceType") in CONTROLLER_TYPES]
+        self.remotes = [d for d in hub.devices if d.get("deviceType") in CONTROLLER_TYPES]
         self.read_registries()
 
+    # --- registries ---------------------------------------------------------
+
     def read_registries(self) -> None:
-        self.entries = er.async_entries_for_config_entry(self.ent_reg, self.entry.entry_id)
-        self.devices = dr.async_entries_for_config_entry(self.dev_reg, self.entry.entry_id)
-        self.key_by_entity_id = {e.entity_id: f"{e.domain}|{e.unique_id}" for e in self.entries}
+        """(Re)read this entry's entities and devices; events can change them."""
+        self.reg_entries = er.async_entries_for_config_entry(self.ent_reg, self.config_entry.entry_id)
+        self.devices = dr.async_entries_for_config_entry(self.dev_reg, self.config_entry.entry_id)
+        self.key_by_entity_id = {e.entity_id: _entity_key(e) for e in self.reg_entries}
         self.device_by_ident = {_ident(d): d for d in self.devices}
 
-    def owner(self, unique_id: str) -> dict | None:
-        """The hub device an entity belongs to: the longest hub id its unique_id starts with."""
-        found = [d for d in self.hub.devices if unique_id.startswith(d["id"])]
-        return max(found, key=lambda d: len(d["id"]), default=None)
+    def area_name(self, device) -> str | None:
+        return self.area_reg.async_get_area(device.area_id).name if device.area_id else None
 
     def racy(self, device_id: str) -> bool:
         """The entities of this device come from parts with different rooms.
@@ -129,20 +178,22 @@ class Pinner:
         the area in it or not. Seen only for MYGGSPRAY (light sensor part
         without a room, motion part with one): 8 of 36 setups without the area.
         """
-        rooms = {_room(o) for e in self.entries if e.device_id == device_id
-                 if (o := self.owner(e.unique_id)) is not None}
+        rooms = {_room(o) for e in self.reg_entries if e.device_id == device_id
+                 if (o := hub_device_of(e.unique_id, self.hub.devices)) is not None}
         return len(rooms) > 1
 
-    def entity_id(self, entry) -> str:
+    def pinned_entity_id(self, reg_entry) -> str:
         """The entity_id, with the area slug marked only where it is racy."""
-        if entry.device_id is None or not self.racy(entry.device_id):
-            return entry.entity_id
-        domain, obj = entry.entity_id.split(".", 1)
+        if reg_entry.device_id is None or not self.racy(reg_entry.device_id):
+            return reg_entry.entity_id
+        domain, obj = reg_entry.entity_id.split(".", 1)
         for slug in self.area_slugs:
             if obj.startswith(slug + "_"):
                 obj = obj[len(slug) + 1:]
                 break
         return f"{domain}.(racy area)_{obj}"
+
+    # --- sections -----------------------------------------------------------
 
     def pin_devices(self) -> dict:
         out = {}
@@ -151,7 +202,7 @@ class Pinner:
             out[_ident(device)] = {
                 "name": device.name,
                 "name_by_user": device.name_by_user,
-                "area": self.area_reg.async_get_area(device.area_id).name if device.area_id else None,
+                "area": self.area_name(device),
                 "model": device.model,
                 "model_id": device.model_id,
                 "manufacturer": device.manufacturer,
@@ -160,26 +211,26 @@ class Pinner:
                 "serial_number": device.serial_number,
                 "connections": sorted(list(c) for c in device.connections),
                 "via": _ident(via),
-                "entry_type": _flag(device.entry_type),
-                "disabled_by": _flag(device.disabled_by),
+                "entry_type": _enum_str(device.entry_type),
+                "disabled_by": _enum_str(device.disabled_by),
             }
         return out
 
     def pin_entities(self) -> dict:
         out = {}
-        for e in self.entries:
+        for e in self.reg_entries:
             device = self.dev_reg.async_get(e.device_id) if e.device_id else None
-            out[f"{e.domain}|{e.unique_id}"] = {
-                "entity_id": self.entity_id(e),
+            out[_entity_key(e)] = {
+                "entity_id": self.pinned_entity_id(e),
                 "original_name": e.original_name,
                 "has_entity_name": e.has_entity_name,
                 "translation_key": e.translation_key,
                 "device_class": e.original_device_class,
-                "entity_category": _flag(e.entity_category),
+                "entity_category": _enum_str(e.entity_category),
                 "unit": e.unit_of_measurement,
                 "device": _ident(device),
-                "disabled_by": _flag(e.disabled_by),
-                "hidden_by": _flag(e.hidden_by),
+                "disabled_by": _enum_str(e.disabled_by),
+                "hidden_by": _enum_str(e.hidden_by),
             }
         return out
 
@@ -198,11 +249,9 @@ class Pinner:
 
     def press_ids(self, offered: dict) -> list[str]:
         """Every remote part, plus <base>_N for each buttonN its own device offers."""
-        ids = set(self.remote_ids)
-        for d in self.hub.devices:
-            if d.get("deviceType") not in CONTROLLER_TYPES:
-                continue
-            device = self.device_by_ident.get(f"{DOMAIN}:{d.get('relationId') or d['id']}")
+        ids = {d["id"] for d in self.remotes}
+        for d in self.remotes:
+            device = self.device_by_ident.get(":".join(device_identifier(d)))
             numbers = {int(m.group(1)) for t in offered.get(device.id if device else None, ())
                        if (m := BUTTON_TYPE.match(t or ""))}
             ids |= {f"{d['id'].rsplit('_', 1)[0]}_{n}" for n in numbers}
@@ -210,14 +259,14 @@ class Pinner:
 
     async def pin_presses(self, offered: dict) -> dict:
         fired: list = []
-        unsub = self.hass.bus.async_listen("dirigera_platform_event", lambda ev: fired.append(dict(ev.data)))
+        unsub = self.hass.bus.async_listen(REMOTE_EVENT, lambda ev: fired.append(dict(ev.data)))
         out = {}
         # One time for all presses: no two presses share a debounce key
         # (device and trigger type), so none is debounced.
         for hub_id in self.press_ids(offered):
             for pattern in CLICK_PATTERNS:
                 fired.clear()
-                self.listener._apply_message({
+                deliver(self.listener, {
                     "type": "remotePressEvent",
                     "time": PRESS_TIME,
                     "data": {"id": hub_id, "clickPattern": pattern},
@@ -236,70 +285,78 @@ class Pinner:
         unsub()
         return out
 
-    def states(self) -> dict:
+    # --- hub event probes ---------------------------------------------------
+
+    def snapshot(self) -> dict:
         """Entity states, and each device's name and area: what an event can change."""
+        self.read_registries()
         out = {}
-        for e in er.async_entries_for_config_entry(self.ent_reg, self.entry.entry_id):
+        for e in self.reg_entries:
             st = self.hass.states.get(e.entity_id)
-            out[f"{e.domain}|{e.unique_id}"] = None if st is None else (st.state, dict(st.attributes))
-        for d in dr.async_entries_for_config_entry(self.dev_reg, self.entry.entry_id):
-            area = self.area_reg.async_get_area(d.area_id).name if d.area_id else None
-            out[f"device|{_ident(d)}"] = (d.name, {"area": area})
+            out[_entity_key(e)] = None if st is None else Snapshot(st.state, dict(st.attributes))
+        for d in self.devices:
+            out[f"device|{_ident(d)}"] = Snapshot(d.name, {"area": self.area_name(d)})
         return out
 
     @staticmethod
     def changes(before: dict, after: dict) -> dict:
-        """Per entity that changed: its state "old -> new", or the attributes that changed."""
+        """Per entity or device that changed: its state "old -> new", or the attributes that changed."""
         out = {}
         for key in sorted(set(before) | set(after)):
             a, b = before.get(key), after.get(key)
             if a == b:
                 continue
-            if a is None or b is None or a[0] != b[0]:
-                out[key] = f"{a and a[0]} -> {b and b[0]}"
+            if a is None or b is None or a.state != b.state:
+                out[key] = f"{a and a.state} -> {b and b.state}"
             else:
-                out[key] = sorted(k for k in set(a[1]) | set(b[1]) if a[1].get(k) != b[1].get(k))
+                out[key] = sorted(k for k in set(a.attributes) | set(b.attributes)
+                                  if a.attributes.get(k) != b.attributes.get(k))
         return out
 
     async def send(self, data: dict) -> None:
-        self.listener._apply_message({"type": "deviceStateChanged", "data": data})
+        deliver(self.listener, {"type": "deviceStateChanged", "data": data})
         await self.hass.async_block_till_done()
 
+    async def probe_reachability(self, d: dict, base: dict) -> dict:
+        await self.send({**d, "isReachable": not d.get("isReachable", True)})
+        return self.changes(base, self.snapshot())
+
+    async def probe_rename(self, d: dict, base: dict) -> dict:
+        """Each part has its own name on the hub. Whether a part's name reaches
+        the device is what this shows; another part routed here must not rename it."""
+        attrs = d.get("attributes") or {}
+        await self.send({**d, "attributes": {**attrs, "customName": f"Renamed {d['id']}"}})
+        return self.changes(base, self.snapshot())
+
+    async def probe_attribute(self, d: dict) -> dict:
+        """One value typical of the type, measured from reachable: on an
+        unreachable device a changed value does not show, whatever it reaches."""
+        device_type = d.get("deviceType")
+        attrs = d.get("attributes") or {}
+        if device_type in UNPROBED:
+            return {}
+        if device_type not in PROBES:
+            return {"attribute": f"NO PROBE for {device_type}"}
+        name, change = PROBES[device_type]
+        if name not in attrs:
+            return {"attribute": f"{name} not in the fixture"}
+        await self.send({**d, "isReachable": True})
+        reachable = self.snapshot()
+        await self.send({**d, "isReachable": True, "attributes": {**attrs, name: change(attrs[name])}})
+        return {"attribute": name, "attribute_changes": self.changes(reachable, self.snapshot())}
+
     async def pin_hub_ids(self) -> dict:
-        """Per hub id: what an event for it changes in Home Assistant, then put back."""
+        """Per hub id: what an event for it changes, each probe followed by putting it back."""
         out = {}
         for d in self.hub.devices:
-            row = {}
-            base = self.states()
-
-            await self.send({**d, "isReachable": not d.get("isReachable", True)})
-            row["reachability_flipped"] = self.changes(base, self.states())
+            base = self.snapshot()
+            row = {"reachability_flipped": await self.probe_reachability(d, base)}
             await self.send(d)
-
-            # Each part has its own name on the hub. Whether a part's name
-            # reaches the device (and which) is what this shows; another part
-            # routed here must not rename it.
-            await self.send({**d, "attributes": {**(d.get("attributes") or {}), "customName": f"Renamed {d['id']}"}})
-            row["renamed"] = self.changes(base, self.states())
+            row["renamed"] = await self.probe_rename(d, base)
             await self.send(d)
-
-            # Measured from reachable: on an unreachable device a changed
-            # value does not show, whatever entity it reaches.
-            probe = PROBES.get(d.get("deviceType"))
-            attrs = d.get("attributes") or {}
-            if probe and probe[0] in attrs:
-                name, how = probe
-                value = attrs[name]
-                changed = (not value) if how == "flip" else value + (1 if how == "up" else -1)
-                await self.send({**d, "isReachable": True})
-                reachable = self.states()
-                await self.send({**d, "isReachable": True, "attributes": {**attrs, name: changed}})
-                row["attribute"] = name
-                row["attribute_changes"] = self.changes(reachable, self.states())
-                await self.send(d)
-
-            back = self.changes(base, self.states())
-            if back:
+            row.update(await self.probe_attribute(d))
+            await self.send(d)
+            if back := self.changes(base, self.snapshot()):
                 row["not_back_after_restore"] = back
             out[d["id"]] = row
         return out
@@ -315,55 +372,62 @@ class Pinner:
         self.read_registries()
         pins["entities"] = self.pin_entities()
         pins["devices"] = self.pin_devices()
-        pins["hub_writes"] = sorted(f"{m} {r}" for m, r, _ in self.hub.writes)
+        pins["hub_writes"] = sorted(f"{method} {route}" for method, route in self.hub.writes)
         pins["unknown_hub_routes"] = sorted(set(self.hub.unknown))
         return pins
 
 
-def _diff(old: dict, new: dict) -> list[str]:
-    out = []
-    for section in sorted(set(old) | set(new)):
-        a, b = old.get(section), new.get(section)
-        if not (isinstance(a, dict) and isinstance(b, dict)):
-            if a != b:
-                out.append(f"{section}:\n    was {json.dumps(a)}\n    now {json.dumps(b)}")
-            continue
-        for key in sorted(set(a) | set(b)):
-            if key not in b:
-                out.append(f"{section}: GONE   {key}: {json.dumps(a[key])}")
-            elif key not in a:
-                out.append(f"{section}: NEW    {key}: {json.dumps(b[key])}")
-            elif a[key] != b[key]:
-                out.append(f"{section}: CHANGE {key}:\n    was {json.dumps(a[key])}\n    now {json.dumps(b[key])}")
-    return out
+def _dump(value) -> str:
+    return json.dumps(value, sort_keys=True, ensure_ascii=False)
 
 
-@pytest.mark.parametrize(("fixture", "label", "extra"), CASES, ids=[f"{c[0]}-{c[1]}" for c in CASES])
-async def test_pins(hass, fake_hub_factory, captured_listener, fixture, label, extra):
-    hub = fake_hub_factory(fixture)
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        title="pintest",
-        data={**ENTRY_DATA, **extra},
-        unique_id="192.0.2.1",
-    )
-    entry.add_to_hass(hass)
-    assert await hass.config_entries.async_setup(entry.entry_id)
+def _diff(old, new, path: str = "") -> list[str]:
+    """One line per moved value, with its path (section.key.field...)."""
+    if isinstance(old, dict) and isinstance(new, dict):
+        out = []
+        for key in sorted(set(old) | set(new)):
+            sub = f"{path}.{key}" if path else key
+            if key not in new:
+                out.append(f"{sub}: GONE (was {_dump(old[key])})")
+            elif key not in old:
+                out.append(f"{sub}: NEW {_dump(new[key])}")
+            else:
+                out.extend(_diff(old[key], new[key], sub))
+        return out
+    return [] if old == new else [f"{path}: {_dump(old)} -> {_dump(new)}"]
+
+
+@pytest.mark.parametrize(("fixture", "mode"), CASES, ids=[_pin_name(*c) for c in CASES])
+async def test_pins(hass, fake_hub, captured_listener, pin_update, fixture, mode):
+    hub = fake_hub(fixture)
+    config_entry = MockConfigEntry(
+        domain=DOMAIN, title="pintest", data={**ENTRY_DATA, **MODES[mode]}, unique_id=HUB_IP)
+    config_entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
     assert captured_listener, "setup did not create the hub event listener"
 
-    pins = await Pinner(hass, entry, hub, captured_listener[0]).collect()
+    pins = await Pinner(hass, config_entry, hub, captured_listener[0]).collect()
 
-    assert await hass.config_entries.async_unload(entry.entry_id)
+    assert await hass.config_entries.async_unload(config_entry.entry_id)
     await hass.async_block_till_done()
+    assert not listener_registrations_left(), "listener registrations left after unload"
 
-    path = PINS / f"{fixture}__{label}.json"
-    if os.environ.get("PIN_UPDATE") or not path.exists():
+    path = PINS / f"{_pin_name(fixture, mode)}.json"
+    if pin_update or not path.exists():
         PINS.mkdir(exist_ok=True)
-        path.write_text(json.dumps(pins, indent=1, sort_keys=True, ensure_ascii=False) + "\n")
-        if not os.environ.get("PIN_UPDATE"):
-            pytest.fail(f"no pin file yet; wrote {path.name}, review it and commit it")
+        path.write_text(json.dumps(pins, indent=1, sort_keys=True, ensure_ascii=False) + "\n", encoding="utf-8")
+        if not pin_update:
+            pytest.fail(f"no pin file yet; wrote {path.name}, review it and commit it", pytrace=False)
         return
 
-    differences = _diff(json.loads(path.read_text()), pins)
-    assert not differences, "pins moved:\n" + "\n".join(differences)
+    differences = _diff(json.loads(path.read_text(encoding="utf-8")), pins)
+    if differences:
+        pytest.fail(f"{len(differences)} pins moved in {path.name}:\n" + "\n".join(differences), pytrace=False)
+
+
+def test_every_pin_file_has_a_case():
+    """A pin file whose fixture or mode is gone would never be compared again."""
+    names = {_pin_name(*c) for c in CASES}
+    orphans = sorted(p.stem for p in PINS.glob("*.json") if p.stem not in names)
+    assert not orphans, f"pin files without a case (remove them or restore their fixture): {orphans}"

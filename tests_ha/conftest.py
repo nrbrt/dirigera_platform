@@ -6,15 +6,14 @@ device triggers), so they run the integration's real setup in a real HA, with
 only the hub replaced. Run them in the image from tests_ha/Dockerfile:
 
     docker build -t dirigera-pintest tests_ha
-    docker run --rm -v "$PWD":/repo dirigera-pintest tests_ha -p no:cacheprovider
+    docker run --rm -v "$PWD":/repo -u "$(id -u):$(id -g)" -e HOME=/tmp \
+        dirigera-pintest -c tests_ha/pytest.ini tests_ha -p no:cacheprovider
 """
 from __future__ import annotations
 
 import copy
 import importlib
 import json
-import os
-import re
 from pathlib import Path
 from unittest.mock import patch
 
@@ -71,12 +70,13 @@ class FakeHub:
 
 @pytest.fixture
 def fake_hub_factory():
-    """patch_hub(fixture_name) -> FakeHub, with dirigera.Hub's network methods patched."""
+    """make(fixture_name) -> FakeHub, with dirigera.Hub's network methods patched. Once per test."""
     from dirigera.hub.hub import Hub
 
     patches = []
 
     def make(name: str) -> FakeHub:
+        assert not patches, "one fake hub per test"
         hub = FakeHub(json.loads((FIXTURES / f"{name}.json").read_text()))
         patches.extend([
             patch.object(Hub, "get", lambda self, route: hub.get(route)),
@@ -99,6 +99,7 @@ def captured_listener():
 
     No WebSocket thread runs; the test feeds messages to _apply_message on the
     event loop, which is where on_message hands them in production.
+    Yields the list of listeners setup created.
     """
     # The package re-exports the class under the module's name, so import the module itself.
     hel = importlib.import_module("custom_components.dirigera_platform.hub_event_listener")
@@ -118,8 +119,6 @@ def captured_listener():
     # The listener's registry is a class attribute: a test must not see the
     # entities of the one before it.
     hel.hub_event_listener.device_registry.clear()
-    hel.controller_trigger_last_time_map.clear()
-    hel.remotes_with_press_events.clear()
     with patch.object(hel.hub_event_listener, "start", fake_start), \
             patch.object(hel.hub_event_listener, "stop", fake_stop):
         yield holder

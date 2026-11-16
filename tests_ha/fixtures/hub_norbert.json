@@ -16,7 +16,7 @@
     "hardwareVersion": "1",
     "identifyPeriod": 0,
     "identifyStarted": "2000-01-01T00:00:00.000Z",
-    "isOn": false,
+    "isOn": true,
     "lightLevel": 100,
     "manufacturer": "IKEA of Sweden",
     "model": "TRADFRI bulb E27 WS globe 1055lm",
@@ -48,7 +48,7 @@
    "id": "device-01_1",
    "isHidden": false,
    "isReachable": true,
-   "lastSeen": "2026-11-15T21:00:23.000Z",
+   "lastSeen": "2026-11-16T15:45:21.000Z",
    "remoteLinks": [],
    "room": {
     "color": "ikea_brown_no_41",
@@ -1216,10 +1216,10 @@
   },
   {
    "attributes": {
-    "currentCO2": 843,
+    "currentCO2": 887,
     "currentPM25": 0,
     "currentRH": 52,
-    "currentTemperature": 18.6299991607666,
+    "currentTemperature": 18.59000015258789,
     "customName": "Device 18",
     "discriminator": "**REDACTED**",
     "firmwareVersion": "1.0.26",
@@ -1259,7 +1259,7 @@
    "id": "device-18_1",
    "isHidden": false,
    "isReachable": true,
-   "lastSeen": "2026-11-16T15:20:36.000Z",
+   "lastSeen": "2026-11-16T15:57:43.000Z",
    "remoteLinks": [],
    "room": {
     "color": "ikea_green_no_65",
@@ -1337,7 +1337,7 @@
    ],
    "id": "device-19_1",
    "isReachable": true,
-   "lastSeen": "2026-11-16T15:20:00.981Z",
+   "lastSeen": "2026-11-16T15:58:00.339Z",
    "relationId": "device-19",
    "remoteLinks": [],
    "type": "gateway"
@@ -1450,15 +1450,15 @@
       "isOn": true,
       "lightLevel": 61
      },
-     "deviceId": "device-04_1",
+     "deviceId": "device-02_1",
      "enabled": true,
-     "id": "device-04_1",
+     "id": "device-02_1",
      "type": "device"
     }
    ],
    "commands": [],
    "createdAt": "2026-01-29T21:12:44.912Z",
-   "id": "device-01",
+   "id": "device-21",
    "info": {
     "icon": "scenes_clean_sparkles",
     "name": "Scene 1"
@@ -1468,7 +1468,7 @@
    "triggers": [
     {
      "disabled": false,
-     "id": "device-03",
+     "id": "device-23",
      "triggeredAt": "2026-02-04T07:07:40.980Z",
      "type": "app"
     }
@@ -1485,15 +1485,15 @@
       "isOn": true,
       "lightLevel": 61
      },
-     "deviceId": "device-04_1",
+     "deviceId": "device-02_1",
      "enabled": true,
-     "id": "device-04_1",
+     "id": "device-02_1",
      "type": "device"
     }
    ],
    "commands": [],
    "createdAt": "2026-01-29T21:11:47.396Z",
-   "id": "device-02",
+   "id": "device-22",
    "info": {
     "icon": "scenes_clean_sparkles",
     "name": "Scene 2"
@@ -1503,7 +1503,7 @@
    "triggers": [
     {
      "disabled": false,
-     "id": "device-05",
+     "id": "device-24",
      "triggeredAt": "2026-02-24T07:03:29.985Z",
      "type": "app"
     }

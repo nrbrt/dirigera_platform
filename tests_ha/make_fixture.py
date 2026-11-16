@@ -67,8 +67,11 @@ def restore(anon, named):
 def main(path):
     raw = json.load(open(path))
     devices, scenes = neutral_names(raw["devices"], raw.get("scenes", []))
-    anon = restore(anonymise.anonymise_devices(devices), devices)
-    anon_scenes = anonymise.anonymise_devices(scenes) if scenes else []
+    # One call, so one id mapping: a scene's actions keep pointing at the
+    # same devices, and a scene id can never equal a device's id.
+    both = anonymise.anonymise_devices(devices + scenes)
+    anon = restore(both[:len(devices)], devices)
+    anon_scenes = both[len(devices):]
     for a, n in zip(anon_scenes, scenes):
         if "name" in (n.get("info") or {}):
             a["info"]["name"] = n["info"]["name"]

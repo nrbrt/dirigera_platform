@@ -33,7 +33,14 @@ from .const import (
 )
 from .hub_event_listener import hub_event_listener
 from .hub_writer import start_hub_writer
-from .stale_devices import async_remove_stale_devices, is_stale, known_identifiers
+from .stale_devices import (
+    async_remove_stale_devices,
+    excluded_matter_identifiers,
+    find_excluded_matter_devices,
+    is_stale,
+    known_identifiers,
+)
+from .dirigera_lib_patch import is_matter_device
 from .anonymise import anonymise_devices
 from .device_discovery import DeviceDiscoveryCoordinator, set_discovery_coordinator
 from .device_sets import DeviceSetIndex, resolve_device_set_mode, sets_wanted
@@ -287,6 +294,14 @@ async def async_setup_entry(
             f"Cannot connect to IKEA Dirigera hub at {hass_data[CONF_IP_ADDRESS]}: {err}"
         ) from err
     
+    # #75: with "Skip Matter devices" on, the devices this integration
+    # imported for Matter devices before are left behind. Remove them, but
+    # only those the hub still marks as Matter (the same test the filter
+    # uses), so the match is certain; a device that is gone from the hub is
+    # the stale-device check's business, which only logs.
+    if hass_data.get(CONF_EXCLUDE_MATTER, DEFAULT_EXCLUDE_MATTER):
+        await _async_remove_excluded_matter_devices(hass, entry, hass_data)
+
     #await hass.async_add_executor_job(platform.make_devices,hass, hass_data[CONF_IP_ADDRESS], hass_data[CONF_TOKEN])
 
     # Initialize the discovery coordinator BEFORE platform setup
@@ -409,13 +424,18 @@ async def async_remove_config_entry_device(
     config_entry: config_entries.ConfigEntry,
     device_entry: config_entries.DeviceEntry,
 ) -> bool:
-    """Let the user delete a device only when the hub no longer has it.
+    """Let the user delete a device only when we no longer create it: the hub
+    no longer has it, or the Matter filter keeps it out (#75).
 
-    A device that is still on the hub comes back on the next start, so deleting
+    A device that is still created comes back on the next start, so deleting
     it would only look like it worked. When the hub cannot be asked, keep it.
     """
     data = config_entry.data
-    hub = Hub(data[CONF_TOKEN], data[CONF_IP_ADDRESS])
+    # With "Skip Matter devices" on, a Matter device on the hub is one we no
+    # longer create, so the user may delete it (#75). The plain Hub listed it
+    # as known and the delete was refused.
+    hub = HubX(data[CONF_TOKEN], data[CONF_IP_ADDRESS],
+               exclude_matter=data.get(CONF_EXCLUDE_MATTER, DEFAULT_EXCLUDE_MATTER))
     try:
         known = known_identifiers(await hass.async_add_executor_job(hub.get, "/devices"))
     except Exception as ex:
@@ -425,3 +445,28 @@ async def async_remove_config_entry_device(
         logger.warning("Cannot check the hub before removing a device: no device list")
         return False
     return is_stale(device_entry, known)
+
+
+async def _async_remove_excluded_matter_devices(hass, entry, hass_data) -> list[str]:
+    """Remove our devices that stand for hub devices the Matter filter keeps
+    out (#75). Their entities go with them; a device of Home Assistant's own
+    Matter integration is another device and is not touched."""
+    try:
+        raw = await hass.async_add_executor_job(
+            Hub(hass_data[CONF_TOKEN], hass_data[CONF_IP_ADDRESS]).get, "/devices")
+    except Exception as ex:
+        logger.warning("Skip Matter devices: cannot read the hub, nothing removed: %s", ex)
+        return []
+    excluded = excluded_matter_identifiers(raw, is_matter_device)
+    if not excluded:
+        return []
+    device_reg = dr.async_get(hass)
+    removed = []
+    for device in find_excluded_matter_devices(
+            dr.async_entries_for_config_entry(device_reg, entry.entry_id), excluded):
+        logger.warning(
+            "Skip Matter devices is on: removing %s, which the hub marks as a Matter "
+            "device and this integration no longer imports (#75)", device.name_by_user or device.name)
+        device_reg.async_update_device(device.id, remove_config_entry_id=entry.entry_id)
+        removed.append(device.id)
+    return removed

@@ -267,3 +267,42 @@ def test_half_device_with_entities_left_is_kept():
                       entities={"d-t1": ["sensor.slaapkamer_temperature"]})
     assert sorted(reg.removed) == ["d-g1", "d-t2"]
     assert "t_1" not in found
+
+
+# --- #75: devices the Matter filter keeps out ------------------------------------
+
+def _is_matter(device):
+    # Same test as dirigera_lib_patch.is_matter_device: the commissioning keys.
+    return any(k in (device.get("attributes") or {}) for k in ("discriminator", "qrCode", "setupCode"))
+
+
+_MATTER = {"discriminator": "", "qrCode": "", "setupCode": ""}
+MATTER_HUB = [
+    {"id": "m1", "attributes": dict(_MATTER)},                                  # Matter bulb
+    {"id": "m2_1", "relationId": "m2", "attributes": dict(_MATTER)},            # Matter split device
+    {"id": "m2_2", "relationId": "m2", "attributes": dict(_MATTER)},
+    {"id": "z1", "attributes": {"customName": "zigbee"}},                       # not Matter
+    {"id": "mix_1", "relationId": "mix", "attributes": dict(_MATTER)},         # one half Matter,
+    {"id": "mix_2", "relationId": "mix", "attributes": {}},                     # the other not
+]
+
+
+def test_only_devices_the_hub_marks_as_matter_are_found():
+    excluded = sd.excluded_matter_identifiers(MATTER_HUB, _is_matter)
+    devices = [_device("d1", "m1"), _device("d2", "m2"), _device("d3", "z1"),
+               _device("d4", "mix"), _device("d5", "set-id")]
+    found = {d.id for d in sd.find_excluded_matter_devices(devices, excluded)}
+    assert found == {"d1", "d2"}
+
+
+def test_a_device_with_one_identifier_outside_the_matter_set_is_kept():
+    excluded = sd.excluded_matter_identifiers(MATTER_HUB, _is_matter)
+    both = SimpleNamespace(id="d6", identifiers={("dirigera_platform", "m1"), ("dirigera_platform", "z1")},
+                           config_entries={"e1"}, name="x", name_by_user=None)
+    assert sd.find_excluded_matter_devices([both], excluded) == []
+
+
+def test_no_usable_hub_list_means_nothing_is_found():
+    assert sd.excluded_matter_identifiers([], _is_matter) is None
+    assert sd.excluded_matter_identifiers(None, _is_matter) is None
+    assert sd.find_excluded_matter_devices([_device("d1", "m1")], set()) == []

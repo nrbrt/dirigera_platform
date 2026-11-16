@@ -84,6 +84,40 @@ def superseded_identifiers(devices: Any) -> dict[str, str]:
     }
 
 
+def excluded_matter_identifiers(devices: Any, is_matter) -> set[str] | None:
+    """Identifiers of the hub devices the Matter filter keeps out (#75).
+
+    From the raw /devices response: the device identifier (relationId or id)
+    and the id of every device the hub marks as Matter (is_matter, the same
+    test HubX filters on). An identifier that a non-Matter device carries too
+    is left out: when in doubt, a device stays. None when the response is not
+    a usable list.
+    """
+    if not isinstance(devices, list) or not devices:
+        return None
+    matter: set[str] = set()
+    other: set[str] = set()
+    for device in devices:
+        if not isinstance(device, dict):
+            continue
+        ids = {device_identifier(device), device.get("id")} - {None, ""}
+        (matter if is_matter(device) else other).update(ids)
+    return matter - other
+
+
+def find_excluded_matter_devices(
+    devices: Iterable[dr.DeviceEntry], excluded: set[str]
+) -> list[dr.DeviceEntry]:
+    """Devices of ours that only stand for hub devices the Matter filter
+    keeps out. A device with any identifier outside that set is kept."""
+    found = []
+    for device in devices:
+        ours = _our_identifiers(device)
+        if ours and all(identifier in excluded for identifier in ours):
+            found.append(device)
+    return found
+
+
 def _our_identifiers(device: dr.DeviceEntry) -> list[str]:
     return [value for domain, value in device.identifiers if domain == DOMAIN_KEY]
 

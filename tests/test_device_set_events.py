@@ -443,11 +443,16 @@ def test_lights_only_imports_no_sets():
     assert sorted(world.added_ids()) == ["a", "b", "c", "d"]
 
 
-def test_a_set_follows_its_first_light():
+def test_a_set_follows_all_its_lights_and_the_first_is_its_controller():
+    # Since step 4 of 0.4.1 (16-11-2026) the set's state is derived from all
+    # its lights, so an event of ANY member must write the set: every member
+    # cascades to it, not only the first (which was the case under #76).
     world = World(SETS_ONLY, BULBS)
     kitchen = world.set_entity("kitchen")
+    assert kitchen._controller is world.bulbs["a"]
     assert world.cascade_of("a") is kitchen
-    assert world.cascade_of("b") is None
+    assert world.cascade_of("b") is kitchen
+    assert world.cascade_of("c") is None
     assert kitchen.brightness == 128 and kitchen.available
 
 
@@ -637,3 +642,56 @@ def test_a_join_during_the_resync_fetch_is_not_undone_by_the_older_snapshot():
 
     memberships = [args[1] for name, args in spy.calls if name == "async_handle_membership"]
     assert memberships == [joined], memberships
+
+
+# --- step 4: the set's state from all its lights (16-11-2026) --------------------
+
+def _kitchen(a, b):
+    """a and b as (is_on, brightness, hs, color_mode, available)."""
+    world = World(SETS_AND_LIGHTS, BULBS)
+    kitchen = world.set_entity("kitchen")
+    for bulb_id, (on, bri, hs, mode, avail) in (("a", a), ("b", b)):
+        bulb = world.bulbs[bulb_id]
+        bulb.is_on, bulb.brightness, bulb.hs_color, bulb.color_mode, bulb.available = on, bri, hs, mode, avail
+        bulb.supported_color_modes = {"color_temp", "hs"}
+        bulb.color_temp_kelvin = None
+    return world, kitchen
+
+
+def test_the_set_is_on_when_any_light_is_on_also_when_the_first_is_off():
+    world, kitchen = _kitchen((False, 50, None, "hs", True), (True, 200, (30.0, 60.0), "hs", True))
+    assert kitchen.is_on is True
+    assert kitchen.brightness == 200          # only the lit light counts
+    assert kitchen.hs_color == (30.0, 60.0)   # from the first light that is on
+
+
+def test_brightness_is_the_mean_of_the_lights_that_are_on():
+    world, kitchen = _kitchen((True, 100, (10.0, 50.0), "hs", True), (True, 201, (200.0, 90.0), "hs", True))
+    assert kitchen.brightness == 150
+    assert kitchen.hs_color == (10.0, 50.0)   # the controller first, no mean of hues
+
+
+def test_the_set_is_off_when_all_lights_are_off():
+    world, kitchen = _kitchen((False, 80, None, "hs", True), (False, 90, None, "hs", True))
+    assert kitchen.is_on is False
+
+
+def test_the_set_is_available_when_any_light_is():
+    world, kitchen = _kitchen((True, 80, None, "hs", False), (True, 90, None, "hs", True))
+    assert kitchen.available is True
+    world2, kitchen2 = _kitchen((True, 80, None, "hs", False), (True, 90, None, "hs", False))
+    assert kitchen2.available is False
+
+
+def test_a_mode_the_controller_does_not_support_is_not_reported():
+    world, kitchen = _kitchen((False, 80, None, "hs", True), (True, 90, None, "onoff_unknown", True))
+    assert kitchen.color_mode in kitchen.supported_color_modes
+
+
+def test_a_light_joining_later_gets_the_set_as_its_cascade():
+    world = World(SETS_AND_LIGHTS, BULBS)
+    kitchen = world.set_entity("kitchen")
+    world.manager.async_handle_membership("c", [{"id": "kitchen", "name": "Kitchen"}], None)
+    assert world.cascade_of("c") is kitchen
+    world.manager.async_handle_membership("c", [], None)
+    assert world.cascade_of("c") is None

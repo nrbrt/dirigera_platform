@@ -679,25 +679,31 @@ class ikea_bulb_device_set(LightEntity):
         self.set_controller(controller)
 
     def set_controller(self, bulb) -> None:
-        """Follow another light of the set, or none when the set is empty.
+        """Follow another first light (or none when the set is empty), and
+        the set's current members.
 
-        Moves the cascade: the hub event listener pushes this set's state
-        whenever the controller's state changes.
+        Every member gets the set as its cascade: the hub event listener
+        writes this set's state whenever ANY member's state changes, since the
+        set's state is derived from all of them (step 4 of the 0.4.1 plan).
+        Also when the controller stays the same: a light joined or left.
         """
-        if bulb is self._controller:
-            return
-        hub_key = self._hub.websocket_base_url
-        if self._controller is not None:
-            old = hub_event_listener.get_registry_entry(hub_key, self._controller.unique_id)
-            if old is not None and old.cascade_entity is self:
-                old.cascade_entity = None
         self._controller = bulb
-        if bulb is not None:
-            new = hub_event_listener.get_registry_entry(hub_key, bulb.unique_id)
-            if new is not None:
-                new.cascade_entity = self
+        self._follow_members()
         if self.hass is not None and getattr(self, "enabled", True):
             self.async_write_ha_state()
+
+    def _follow_members(self) -> None:
+        registry = hub_event_listener.device_registry.get(self._hub.websocket_base_url, {})
+        current = set() if self._controller is None else {
+            getattr(bulb, "unique_id", None) for bulb in self._members()}
+        for light_id, entry in registry.items():
+            if light_id != self.unique_id and getattr(entry, "cascade_entity", None) is self \
+                    and light_id not in current:
+                entry.cascade_entity = None
+        for light_id in current:
+            entry = registry.get(light_id)
+            if entry is not None:
+                entry.cascade_entity = self
 
     @property
     def should_poll(self):
@@ -707,9 +713,32 @@ class ikea_bulb_device_set(LightEntity):
     def unique_id(self):
         return self._device_set.id
 
+    # --- state derived from the members (step 4, 16-11-2026) ----------------
+    # As Home Assistant's own light group: on when any member is on,
+    # brightness and colour temperature the mean of the members that are on.
+    # Hue/saturation and the colour mode come from the first member that is
+    # on, the controller first: a mean of hues means nothing. Until 0.4.1 the
+    # set showed only its first light, so a set with one light on and the
+    # first off showed off; and which light is first can change on a restart.
+
+    def _ordered(self) -> list:
+        members = list(self._members())
+        if self._controller in members:
+            members.remove(self._controller)
+            members.insert(0, self._controller)
+        return members
+
+    def _lit(self) -> list:
+        return [m for m in self._ordered() if getattr(m, "is_on", False)]
+
+    @staticmethod
+    def _mean(values):
+        values = [v for v in values if v is not None]
+        return round(sum(values) / len(values)) if values else None
+
     @property
     def available(self):
-        return self._controller is not None and self._controller.available
+        return any(getattr(m, "available", False) for m in self._members())
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -727,8 +756,18 @@ class ikea_bulb_device_set(LightEntity):
         return default if self._controller is None else getattr(self._controller, attr)
 
     @property
+    def is_on(self):
+        members = self._members()
+        if not members:
+            return None
+        return any(getattr(m, "is_on", False) for m in members)
+
+    @property
     def brightness(self):
-        return self._from_controller("brightness")
+        lit = self._lit()
+        if not lit:
+            return self._from_controller("brightness")
+        return self._mean(getattr(m, "brightness", None) for m in lit)
 
     @property
     def max_color_temp_kelvin(self):
@@ -740,15 +779,21 @@ class ikea_bulb_device_set(LightEntity):
 
     @property
     def color_temp_kelvin(self):
-        return self._from_controller("color_temp_kelvin")
+        lit = self._lit()
+        if not lit:
+            return self._from_controller("color_temp_kelvin")
+        return self._mean(getattr(m, "color_temp_kelvin", None) for m in lit)
+
+    def _first_lit(self, attr, default=None):
+        for member in self._lit():
+            value = getattr(member, attr, None)
+            if value is not None:
+                return value
+        return self._from_controller(attr, default)
 
     @property
     def hs_color(self):
-        return self._from_controller("hs_color")
-
-    @property
-    def is_on(self):
-        return self._from_controller("is_on")
+        return self._first_lit("hs_color")
 
     @property
     def supported_color_modes(self):
@@ -756,7 +801,11 @@ class ikea_bulb_device_set(LightEntity):
 
     @property
     def color_mode(self):
-        return self._from_controller("color_mode", ColorMode.ONOFF)
+        mode = self._first_lit("color_mode", ColorMode.ONOFF)
+        supported = self.supported_color_modes or {ColorMode.ONOFF}
+        # A member of another type may be in a mode the controller lacks;
+        # Home Assistant rejects a mode outside supported_color_modes.
+        return mode if mode in supported else self._from_controller("color_mode", ColorMode.ONOFF)
 
     async def _each_member(self, method: str, **kwargs):
         # The hub's /devices/set/{id} PATCH is not reliable: on guaifi's hub

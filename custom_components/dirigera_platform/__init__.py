@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import timedelta
 
 from dirigera import Hub 
 from .dirigera_lib_patch import HubX
@@ -17,9 +18,10 @@ from homeassistant.components.light import PLATFORM_SCHEMA
 from homeassistant.const import CONF_IP_ADDRESS, CONF_TOKEN, Platform
 
 # Import the device class from the component that you want to support
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers import device_registry as dr, entity_registry as er
+from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.storage import Store
 
 from .const import (
@@ -34,7 +36,7 @@ from .const import (
     ROOMS_STORE_VERSION,
     rooms_store_key,
 )
-from .hub_event_listener import hub_event_listener
+from .hub_event_listener import SAFETY_NET_INTERVAL, hub_event_listener
 from .hub_writer import start_hub_writer
 from .stale_devices import (
     async_remove_stale_devices,
@@ -364,6 +366,16 @@ async def async_setup_entry(
     # Per-entry storage instead of a module global: a second hub entry no
     # longer clobbers the first listener, and unload stops the right one.
     hass.data[DOMAIN][entry.entry_id]["hub_events"] = hub_events
+    # One GET /devices every few minutes instead of polling entities (#207).
+    # Home Assistant's own interval: unload cancels it, and the run is a
+    # background task of the entry, which unload and stopping cancel too.
+    @callback
+    def safety_net(_now) -> None:
+        entry.async_create_background_task(
+            hass, hub_events.run_safety_net(), "dirigera_platform safety net")
+
+    entry.async_on_unload(async_track_time_interval(
+        hass, safety_net, timedelta(seconds=SAFETY_NET_INTERVAL)))
 
     # Catches devices that left the hub while Home Assistant was stopped;
     # deviceRemoved events cover the ones that go while it runs. In the

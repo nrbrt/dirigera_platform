@@ -29,7 +29,11 @@ HUB_KEY = "wss://command-writes-state.test"
 
 
 class _Hass:
-    loop = None
+    @property
+    def loop(self):
+        # Home Assistant's loop: here the one the test runs on. A blind
+        # starts its wait for the next level report on it (#207).
+        return asyncio.get_running_loop()
 
     async def async_add_executor_job(self, fn, *args):
         return await asyncio.get_running_loop().run_in_executor(None, fn, *args)
@@ -155,3 +159,119 @@ def test_air_purifier_commands_write_state(env):
     env.run(lambda: device.async_turn_off())
     assert len(fan.states) == 5
     assert [sent[1] for sent in env.hub.sent[-2:]] == ["fanMode", "motorState"]
+
+
+# --- #207 end review, finding 4: a command during a resync fetch -------------
+#
+# The safety net fetches /devices every five minutes. A command accepted while
+# that fetch is on its way is newer than the snapshot; the snapshot must not
+# put the old value back. live_writes knew only what hub events wrote.
+
+@pytest.mark.parametrize("make, command, row_attributes", [
+    (lambda env: env.bc.ikea_blinds_device(env.hass, env.finder, _model(
+        env.hub, "blind_1", blinds_target_level=0, blinds_current_level=0, blinds_state="up")),
+     lambda device: device.async_close_cover,
+     {"blindsTargetLevel": 0, "batteryPercentage": 80}),
+    (lambda env: env.bc.ikea_blinds_device(env.hass, env.finder, _model(
+        env.hub, "blind_1", blinds_target_level=100, blinds_current_level=40, blinds_state="down")),
+     lambda device: device.async_stop_cover,
+     {"blindsState": "down", "blindsCurrentLevel": 41}),
+    (lambda env: env.bc.ikea_outlet_device(env.hass, env.finder, _model(env.hub, "outlet_1", is_on=False)),
+     lambda device: device.async_turn_on,
+     {"isOn": False}),
+])
+def test_a_command_during_a_resync_fetch_is_not_undone_by_the_snapshot(env, make, command, row_attributes):
+    hel = sys.modules["dp_under_test.hub_event_listener"]
+    device = make(env)
+    with hel.live_writes() as newer:  # what the resync opens while it fetches
+        env.run(command(device))
+    asyncio.set_event_loop(asyncio.new_event_loop())  # the listener asks for one
+    listener = hel.hub_event_listener(SimpleNamespace(websocket_base_url=HUB_KEY), env.hass)
+    row = {"id": device._json_data.id, "deviceType": "x", "isReachable": True,
+           "attributes": dict(row_attributes)}
+    # The commanded device keeps all its attributes for this one snapshot
+    # (the next resync or event brings the rest); its own fields still apply.
+    applied = listener._without_newer(row, newer)
+    assert "attributes" not in applied
+    assert applied["isReachable"] is True
+
+
+def test_a_command_outside_a_fetch_notes_nothing(env):
+    hel = sys.modules["dp_under_test.hub_event_listener"]
+    device = env.bc.ikea_outlet_device(env.hass, env.finder, _model(env.hub, "outlet_1", is_on=False))
+    env.run(device.async_turn_on)
+    with hel.live_writes() as newer:
+        pass
+    assert newer.commanded(device) is False
+
+
+def test_a_command_that_writes_the_value_the_model_already_had_is_noted(env):
+    # Follow-up review, finding 3: the model says on (an event that turned
+    # the plug off was missed), the user turns it on during the fetch. The
+    # setter writes the value the model already had, so a before/after diff
+    # notes nothing, and the snapshot's isOn false wins while the plug is on.
+    hel = sys.modules["dp_under_test.hub_event_listener"]
+    device = env.bc.ikea_outlet_device(env.hass, env.finder, _model(env.hub, "outlet_1", is_on=True))
+    with hel.live_writes() as newer:
+        env.run(device.async_turn_on)
+    asyncio.set_event_loop(asyncio.new_event_loop())
+    listener = hel.hub_event_listener(SimpleNamespace(websocket_base_url=HUB_KEY), env.hass)
+    row = {"id": "outlet_1", "deviceType": "outlet", "isReachable": True,
+           "attributes": {"isOn": False}}
+    assert "isOn" not in listener._without_newer(row, newer).get("attributes", {})
+
+
+def test_a_snapshot_applied_between_the_setter_and_the_resume_does_not_win(env, monkeypatch):
+    # Fourth review: the library setter writes the model in the writer's
+    # executor thread, after the hub accepted the PATCH. Before _command
+    # resumes on the loop, a fetch that was opened before the PATCH can
+    # return and its (older) snapshot be applied: it would overwrite what the
+    # setter wrote, and _command would then publish that. So the command is
+    # noted when the PATCH goes out, not only after it.
+    hel = sys.modules["dp_under_test.hub_event_listener"]
+    device = env.bc.ikea_outlet_device(env.hass, env.finder, _model(env.hub, "outlet_1", is_on=False))
+    asyncio.set_event_loop(asyncio.new_event_loop())
+    listener = hel.hub_event_listener(SimpleNamespace(websocket_base_url=HUB_KEY), env.hass)
+    row = {"id": "outlet_1", "deviceType": "outlet", "attributes": {"isOn": False}}
+
+    class Writer:
+        """The hub's writer, with the resync landing at the worst moment."""
+
+        async def run(self, fn, *args, started=None):
+            if started is not None:
+                started()                 # the PATCH goes out
+            result = fn(*args)            # accepted; the setter writes the model
+            applied = listener._without_newer(row, newer)  # the snapshot lands
+            if "attributes" in applied:
+                device._json_data.attributes.is_on = applied["attributes"]["isOn"]
+            return result                 # only now does _command resume
+
+    monkeypatch.setattr(env.bc, "writer_for", lambda hub: Writer())
+    cover = _entity(device, lambda: device._json_data.attributes.is_on)
+    with hel.live_writes() as newer:      # the fetch was opened before the PATCH
+        asyncio.run(device.async_turn_on())
+    assert device._json_data.attributes.is_on is True
+    assert cover.states == [True]
+
+
+def test_a_fetch_that_begins_while_the_request_is_out_sees_the_command(env, monkeypatch):
+    # The mirror: the request is out before the fetch is opened; the note
+    # after the command resumes covers that fetch.
+    hel = sys.modules["dp_under_test.hub_event_listener"]
+    device = env.bc.ikea_outlet_device(env.hass, env.finder, _model(env.hub, "outlet_1", is_on=False))
+    fetch = hel.live_writes()
+    opened = []
+
+    class Writer:
+        async def run(self, fn, *args, started=None):
+            if started is not None:
+                started()                 # out, before any fetch
+            opened.append(fetch.__enter__())  # the safety net opens its fetch
+            return fn(*args)
+
+    monkeypatch.setattr(env.bc, "writer_for", lambda hub: Writer())
+    try:
+        asyncio.run(device.async_turn_on())
+        assert opened[0].commanded(device) is True
+    finally:
+        fetch.__exit__(None, None, None)

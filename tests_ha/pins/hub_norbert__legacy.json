@@ -1,0 +1,1680 @@
+{
+ "devices": {
+  "dirigera_platform:device-01_1": {
+   "area": "Room 1",
+   "connections": [],
+   "disabled_by": null,
+   "entry_type": null,
+   "hw_version": null,
+   "manufacturer": "IKEA of Sweden",
+   "model": "TRADFRI bulb E27 WS globe 1055lm",
+   "model_id": null,
+   "name": "Device 1",
+   "name_by_user": null,
+   "serial_number": null,
+   "sw_version": "3.0.23",
+   "via": null
+  },
+  "dirigera_platform:device-02_1": {
+   "area": "Room 2",
+   "connections": [],
+   "disabled_by": null,
+   "entry_type": null,
+   "hw_version": null,
+   "manufacturer": "IKEA of Sweden",
+   "model": "TRADFRI bulb E14 CWS globe 806lm",
+   "model_id": null,
+   "name": "Device 2",
+   "name_by_user": null,
+   "serial_number": null,
+   "sw_version": "1.0.44",
+   "via": null
+  },
+  "dirigera_platform:device-03_1": {
+   "area": "Room 2",
+   "connections": [],
+   "disabled_by": null,
+   "entry_type": null,
+   "hw_version": null,
+   "manufacturer": "IKEA of Sweden",
+   "model": "MYGGBETT door/window sensor",
+   "model_id": null,
+   "name": "Device 3",
+   "name_by_user": null,
+   "serial_number": null,
+   "sw_version": "1.1.4",
+   "via": null
+  },
+  "dirigera_platform:device-04": {
+   "area": "Room 3",
+   "connections": [],
+   "disabled_by": null,
+   "entry_type": null,
+   "hw_version": null,
+   "manufacturer": "IKEA of Sweden",
+   "model": "MYGGSPRAY wrlss mtn sensor",
+   "model_id": null,
+   "name": "Device 4",
+   "name_by_user": null,
+   "serial_number": null,
+   "sw_version": "1.1.4",
+   "via": null
+  },
+  "dirigera_platform:device-05": {
+   "area": "Room 4",
+   "connections": [],
+   "disabled_by": null,
+   "entry_type": null,
+   "hw_version": null,
+   "manufacturer": "IKEA of Sweden",
+   "model": "GRILLPLATS Plug",
+   "model_id": null,
+   "name": "Device 5",
+   "name_by_user": null,
+   "serial_number": null,
+   "sw_version": "1.4.6",
+   "via": null
+  },
+  "dirigera_platform:device-06": {
+   "area": "Room 5",
+   "connections": [],
+   "disabled_by": null,
+   "entry_type": null,
+   "hw_version": null,
+   "manufacturer": "IKEA of Sweden",
+   "model": "BILRESA scroll wheel",
+   "model_id": null,
+   "name": "Device 6",
+   "name_by_user": null,
+   "serial_number": null,
+   "sw_version": "1.9.15",
+   "via": null
+  },
+  "dirigera_platform:device-07_1": {
+   "area": "Room 6",
+   "connections": [],
+   "disabled_by": null,
+   "entry_type": null,
+   "hw_version": null,
+   "manufacturer": "IKEA of Sweden",
+   "model": "KLIPPBOK water leak sensor",
+   "model_id": null,
+   "name": "Device 7",
+   "name_by_user": null,
+   "serial_number": null,
+   "sw_version": "1.1.1",
+   "via": null
+  },
+  "dirigera_platform:device-08_1": {
+   "area": "Room 2",
+   "connections": [],
+   "disabled_by": null,
+   "entry_type": null,
+   "hw_version": null,
+   "manufacturer": "IKEA of Sweden",
+   "model": "TRETAKT Smart plug",
+   "model_id": null,
+   "name": "Device 8",
+   "name_by_user": null,
+   "serial_number": null,
+   "sw_version": "2.4.4",
+   "via": null
+  },
+  "dirigera_platform:device-09": {
+   "area": "Room 7",
+   "connections": [],
+   "disabled_by": null,
+   "entry_type": null,
+   "hw_version": null,
+   "manufacturer": "IKEA of Sweden",
+   "model": "MYGGSPRAY wrlss mtn sensor",
+   "model_id": null,
+   "name": "Device 9",
+   "name_by_user": null,
+   "serial_number": null,
+   "sw_version": "1.1.4",
+   "via": null
+  },
+  "dirigera_platform:device-10_1": {
+   "area": "Room 3",
+   "connections": [],
+   "disabled_by": null,
+   "entry_type": null,
+   "hw_version": null,
+   "manufacturer": "IKEA of Sweden",
+   "model": "RODRET wireless dimmer",
+   "model_id": null,
+   "name": "Device 10",
+   "name_by_user": null,
+   "serial_number": null,
+   "sw_version": "1.0.57",
+   "via": null
+  },
+  "dirigera_platform:device-11_1": {
+   "area": "Room 4",
+   "connections": [],
+   "disabled_by": null,
+   "entry_type": null,
+   "hw_version": null,
+   "manufacturer": "IKEA of Sweden",
+   "model": "MYGGBETT door/window sensor",
+   "model_id": null,
+   "name": "Device 11",
+   "name_by_user": null,
+   "serial_number": null,
+   "sw_version": "1.1.4",
+   "via": null
+  },
+  "dirigera_platform:device-12_1": {
+   "area": "Room 2",
+   "connections": [],
+   "disabled_by": null,
+   "entry_type": null,
+   "hw_version": null,
+   "manufacturer": "IKEA of Sweden",
+   "model": "TRADFRI bulb E14 CWS globe 806lm",
+   "model_id": null,
+   "name": "Device 12",
+   "name_by_user": null,
+   "serial_number": null,
+   "sw_version": "1.0.44",
+   "via": null
+  },
+  "dirigera_platform:device-13": {
+   "area": "Room 2",
+   "connections": [],
+   "disabled_by": null,
+   "entry_type": null,
+   "hw_version": null,
+   "manufacturer": "IKEA of Sweden",
+   "model": "GRILLPLATS Plug",
+   "model_id": null,
+   "name": "Device 13",
+   "name_by_user": null,
+   "serial_number": null,
+   "sw_version": "1.4.6",
+   "via": null
+  },
+  "dirigera_platform:device-14_1": {
+   "area": "Room 7",
+   "connections": [],
+   "disabled_by": null,
+   "entry_type": null,
+   "hw_version": null,
+   "manufacturer": "IKEA of Sweden",
+   "model": "MYGGBETT door/window sensor",
+   "model_id": null,
+   "name": "Device 14",
+   "name_by_user": null,
+   "serial_number": null,
+   "sw_version": "1.1.4",
+   "via": null
+  },
+  "dirigera_platform:device-15_1": {
+   "area": "Room 2",
+   "connections": [],
+   "disabled_by": null,
+   "entry_type": null,
+   "hw_version": null,
+   "manufacturer": "IKEA of Sweden",
+   "model": "TRADFRI bulb E14 CWS globe 806lm",
+   "model_id": null,
+   "name": "Device 15",
+   "name_by_user": null,
+   "serial_number": null,
+   "sw_version": "1.0.38",
+   "via": null
+  },
+  "dirigera_platform:device-16_1": {
+   "area": "Room 2",
+   "connections": [],
+   "disabled_by": null,
+   "entry_type": null,
+   "hw_version": null,
+   "manufacturer": "IKEA of Sweden",
+   "model": "Remote Control N2",
+   "model_id": null,
+   "name": "Device 16",
+   "name_by_user": null,
+   "serial_number": null,
+   "sw_version": "2.4.17",
+   "via": null
+  },
+  "dirigera_platform:device-17_1": {
+   "area": "Room 2",
+   "connections": [],
+   "disabled_by": null,
+   "entry_type": null,
+   "hw_version": null,
+   "manufacturer": "IKEA of Sweden",
+   "model": "TRADFRI bulb E14 CWS globe 806lm",
+   "model_id": null,
+   "name": "Device 17",
+   "name_by_user": null,
+   "serial_number": null,
+   "sw_version": "1.0.38",
+   "via": null
+  },
+  "dirigera_platform:device-18_1": {
+   "area": "Room 2",
+   "connections": [],
+   "disabled_by": null,
+   "entry_type": null,
+   "hw_version": null,
+   "manufacturer": "IKEA of Sweden",
+   "model": "ALPSTUGA air quality monitor",
+   "model_id": null,
+   "name": "Device 18",
+   "name_by_user": null,
+   "serial_number": null,
+   "sw_version": "1.0.26",
+   "via": null
+  },
+  "dirigera_platform:device-20": {
+   "area": "Room 4",
+   "connections": [],
+   "disabled_by": null,
+   "entry_type": null,
+   "hw_version": null,
+   "manufacturer": "IKEA of Sweden",
+   "model": "MYGGSPRAY wrlss mtn sensor",
+   "model_id": null,
+   "name": "Device 20",
+   "name_by_user": null,
+   "serial_number": null,
+   "sw_version": "1.1.4",
+   "via": null
+  },
+  "dirigera_platform:set-01": {
+   "area": "Room 2",
+   "connections": [],
+   "disabled_by": null,
+   "entry_type": null,
+   "hw_version": null,
+   "manufacturer": "IKEA",
+   "model": "Device Set",
+   "model_id": null,
+   "name": "Set 1",
+   "name_by_user": null,
+   "serial_number": null,
+   "sw_version": "1.0",
+   "via": null
+  },
+  "dirigera_platform:set-02": {
+   "area": "Room 2",
+   "connections": [],
+   "disabled_by": null,
+   "entry_type": null,
+   "hw_version": null,
+   "manufacturer": "IKEA",
+   "model": "Device Set",
+   "model_id": null,
+   "name": "Set 2",
+   "name_by_user": null,
+   "serial_number": null,
+   "sw_version": "1.0",
+   "via": null
+  }
+ },
+ "entities": {
+  "binary_sensor|device-03_1": {
+   "device": "dirigera_platform:device-03_1",
+   "device_class": "window",
+   "disabled_by": null,
+   "entity_category": null,
+   "entity_id": "binary_sensor.room_2_device_3",
+   "has_entity_name": true,
+   "hidden_by": null,
+   "original_name": null,
+   "translation_key": null,
+   "unit": null
+  },
+  "binary_sensor|device-04_2": {
+   "device": "dirigera_platform:device-04",
+   "device_class": "motion",
+   "disabled_by": null,
+   "entity_category": null,
+   "entity_id": "binary_sensor.(racy area)_device_4",
+   "has_entity_name": true,
+   "hidden_by": null,
+   "original_name": null,
+   "translation_key": null,
+   "unit": null
+  },
+  "binary_sensor|device-07_1": {
+   "device": "dirigera_platform:device-07_1",
+   "device_class": "moisture",
+   "disabled_by": null,
+   "entity_category": null,
+   "entity_id": "binary_sensor.room_6_device_7",
+   "has_entity_name": true,
+   "hidden_by": null,
+   "original_name": null,
+   "translation_key": null,
+   "unit": null
+  },
+  "binary_sensor|device-09_2": {
+   "device": "dirigera_platform:device-09",
+   "device_class": "motion",
+   "disabled_by": null,
+   "entity_category": null,
+   "entity_id": "binary_sensor.(racy area)_device_9",
+   "has_entity_name": true,
+   "hidden_by": null,
+   "original_name": null,
+   "translation_key": null,
+   "unit": null
+  },
+  "binary_sensor|device-11_1": {
+   "device": "dirigera_platform:device-11_1",
+   "device_class": "window",
+   "disabled_by": null,
+   "entity_category": null,
+   "entity_id": "binary_sensor.room_4_device_11",
+   "has_entity_name": true,
+   "hidden_by": null,
+   "original_name": null,
+   "translation_key": null,
+   "unit": null
+  },
+  "binary_sensor|device-14_1": {
+   "device": "dirigera_platform:device-14_1",
+   "device_class": "window",
+   "disabled_by": null,
+   "entity_category": null,
+   "entity_id": "binary_sensor.room_7_device_14",
+   "has_entity_name": true,
+   "hidden_by": null,
+   "original_name": null,
+   "translation_key": null,
+   "unit": null
+  },
+  "binary_sensor|device-20_2": {
+   "device": "dirigera_platform:device-20",
+   "device_class": "motion",
+   "disabled_by": null,
+   "entity_category": null,
+   "entity_id": "binary_sensor.(racy area)_device_20",
+   "has_entity_name": true,
+   "hidden_by": null,
+   "original_name": null,
+   "translation_key": null,
+   "unit": null
+  },
+  "light|device-01_1": {
+   "device": "dirigera_platform:device-01_1",
+   "device_class": null,
+   "disabled_by": null,
+   "entity_category": null,
+   "entity_id": "light.room_1_device_1",
+   "has_entity_name": false,
+   "hidden_by": null,
+   "original_name": "Device 1",
+   "translation_key": null,
+   "unit": null
+  },
+  "light|device-02_1": {
+   "device": "dirigera_platform:device-02_1",
+   "device_class": null,
+   "disabled_by": null,
+   "entity_category": null,
+   "entity_id": "light.room_2_device_2",
+   "has_entity_name": false,
+   "hidden_by": null,
+   "original_name": "Device 2",
+   "translation_key": null,
+   "unit": null
+  },
+  "light|device-12_1": {
+   "device": "dirigera_platform:device-12_1",
+   "device_class": null,
+   "disabled_by": null,
+   "entity_category": null,
+   "entity_id": "light.room_2_device_12",
+   "has_entity_name": false,
+   "hidden_by": null,
+   "original_name": "Device 12",
+   "translation_key": null,
+   "unit": null
+  },
+  "light|device-15_1": {
+   "device": "dirigera_platform:device-15_1",
+   "device_class": null,
+   "disabled_by": null,
+   "entity_category": null,
+   "entity_id": "light.room_2_device_15",
+   "has_entity_name": false,
+   "hidden_by": null,
+   "original_name": "Device 15",
+   "translation_key": null,
+   "unit": null
+  },
+  "light|device-17_1": {
+   "device": "dirigera_platform:device-17_1",
+   "device_class": null,
+   "disabled_by": null,
+   "entity_category": null,
+   "entity_id": "light.room_2_device_17",
+   "has_entity_name": false,
+   "hidden_by": null,
+   "original_name": "Device 17",
+   "translation_key": null,
+   "unit": null
+  },
+  "light|set-01": {
+   "device": "dirigera_platform:set-01",
+   "device_class": null,
+   "disabled_by": null,
+   "entity_category": null,
+   "entity_id": "light.room_2_set_1",
+   "has_entity_name": true,
+   "hidden_by": null,
+   "original_name": null,
+   "translation_key": null,
+   "unit": null
+  },
+  "light|set-02": {
+   "device": "dirigera_platform:set-02",
+   "device_class": null,
+   "disabled_by": null,
+   "entity_category": null,
+   "entity_id": "light.room_2_set_2",
+   "has_entity_name": true,
+   "hidden_by": null,
+   "original_name": null,
+   "translation_key": null,
+   "unit": null
+  },
+  "scene|device-21": {
+   "device": null,
+   "device_class": null,
+   "disabled_by": null,
+   "entity_category": null,
+   "entity_id": "scene.scene_1",
+   "has_entity_name": true,
+   "hidden_by": null,
+   "original_name": "Scene 1",
+   "translation_key": null,
+   "unit": null
+  },
+  "scene|device-22": {
+   "device": null,
+   "device_class": null,
+   "disabled_by": null,
+   "entity_category": null,
+   "entity_id": "scene.scene_2",
+   "has_entity_name": true,
+   "hidden_by": null,
+   "original_name": "Scene 2",
+   "translation_key": null,
+   "unit": null
+  },
+  "sensor|device-03_1BP01": {
+   "device": "dirigera_platform:device-03_1",
+   "device_class": "battery",
+   "disabled_by": null,
+   "entity_category": "diagnostic",
+   "entity_id": "sensor.room_2_device_3_battery_percentage",
+   "has_entity_name": true,
+   "hidden_by": null,
+   "original_name": "Battery Percentage",
+   "translation_key": null,
+   "unit": "%"
+  },
+  "sensor|device-04_1LUX": {
+   "device": "dirigera_platform:device-04",
+   "device_class": "illuminance",
+   "disabled_by": null,
+   "entity_category": null,
+   "entity_id": "sensor.(racy area)_device_4_illuminance",
+   "has_entity_name": true,
+   "hidden_by": null,
+   "original_name": "Illuminance",
+   "translation_key": null,
+   "unit": "lx"
+  },
+  "sensor|device-04_2BP01": {
+   "device": "dirigera_platform:device-04",
+   "device_class": "battery",
+   "disabled_by": null,
+   "entity_category": "diagnostic",
+   "entity_id": "sensor.(racy area)_device_4_battery_percentage",
+   "has_entity_name": true,
+   "hidden_by": null,
+   "original_name": "Battery Percentage",
+   "translation_key": null,
+   "unit": "%"
+  },
+  "sensor|device-05_1CA01": {
+   "device": "dirigera_platform:device-05",
+   "device_class": "current",
+   "disabled_by": null,
+   "entity_category": null,
+   "entity_id": "sensor.room_4_device_5_current",
+   "has_entity_name": true,
+   "hidden_by": null,
+   "original_name": "Current",
+   "translation_key": null,
+   "unit": "A"
+  },
+  "sensor|device-05_1CAP01": {
+   "device": "dirigera_platform:device-05",
+   "device_class": "power",
+   "disabled_by": null,
+   "entity_category": null,
+   "entity_id": "sensor.room_4_device_5_power",
+   "has_entity_name": true,
+   "hidden_by": null,
+   "original_name": "Power",
+   "translation_key": null,
+   "unit": "W"
+  },
+  "sensor|device-05_1CV01": {
+   "device": "dirigera_platform:device-05",
+   "device_class": "voltage",
+   "disabled_by": null,
+   "entity_category": null,
+   "entity_id": "sensor.room_4_device_5_voltage",
+   "has_entity_name": true,
+   "hidden_by": null,
+   "original_name": "Voltage",
+   "translation_key": null,
+   "unit": "V"
+  },
+  "sensor|device-05_1ELAR01": {
+   "device": "dirigera_platform:device-05",
+   "device_class": "energy",
+   "disabled_by": "integration",
+   "entity_category": null,
+   "entity_id": "sensor.room_4_device_5_energy_at_last_reset",
+   "has_entity_name": true,
+   "hidden_by": null,
+   "original_name": "Energy at last reset",
+   "translation_key": null,
+   "unit": "kWh"
+  },
+  "sensor|device-05_1TEC01": {
+   "device": "dirigera_platform:device-05",
+   "device_class": "energy",
+   "disabled_by": null,
+   "entity_category": null,
+   "entity_id": "sensor.room_4_device_5_energy",
+   "has_entity_name": true,
+   "hidden_by": null,
+   "original_name": "Energy",
+   "translation_key": null,
+   "unit": "kWh"
+  },
+  "sensor|device-05_1TECLU01": {
+   "device": "dirigera_platform:device-05",
+   "device_class": "timestamp",
+   "disabled_by": null,
+   "entity_category": null,
+   "entity_id": "sensor.room_4_device_5_total_energy_consumed_last_updated",
+   "has_entity_name": true,
+   "hidden_by": null,
+   "original_name": "Total Energy Consumed Last Updated",
+   "translation_key": null,
+   "unit": ""
+  },
+  "sensor|device-05_1TLER01": {
+   "device": "dirigera_platform:device-05",
+   "device_class": "timestamp",
+   "disabled_by": null,
+   "entity_category": null,
+   "entity_id": "sensor.room_4_device_5_time_of_last_energy_reset",
+   "has_entity_name": true,
+   "hidden_by": null,
+   "original_name": "Time of Last Energy Reset",
+   "translation_key": null,
+   "unit": ""
+  },
+  "sensor|device-06_3": {
+   "device": "dirigera_platform:device-06",
+   "device_class": "battery",
+   "disabled_by": null,
+   "entity_category": "diagnostic",
+   "entity_id": "sensor.room_5_device_6",
+   "has_entity_name": false,
+   "hidden_by": null,
+   "original_name": "Device 6",
+   "translation_key": null,
+   "unit": "%"
+  },
+  "sensor|device-07_1BP01": {
+   "device": "dirigera_platform:device-07_1",
+   "device_class": "battery",
+   "disabled_by": null,
+   "entity_category": "diagnostic",
+   "entity_id": "sensor.room_6_device_7_battery_percentage",
+   "has_entity_name": true,
+   "hidden_by": null,
+   "original_name": "Battery Percentage",
+   "translation_key": null,
+   "unit": "%"
+  },
+  "sensor|device-09_1LUX": {
+   "device": "dirigera_platform:device-09",
+   "device_class": "illuminance",
+   "disabled_by": null,
+   "entity_category": null,
+   "entity_id": "sensor.(racy area)_device_9_illuminance",
+   "has_entity_name": true,
+   "hidden_by": null,
+   "original_name": "Illuminance",
+   "translation_key": null,
+   "unit": "lx"
+  },
+  "sensor|device-09_2BP01": {
+   "device": "dirigera_platform:device-09",
+   "device_class": "battery",
+   "disabled_by": null,
+   "entity_category": "diagnostic",
+   "entity_id": "sensor.(racy area)_device_9_battery_percentage",
+   "has_entity_name": true,
+   "hidden_by": null,
+   "original_name": "Battery Percentage",
+   "translation_key": null,
+   "unit": "%"
+  },
+  "sensor|device-10_1": {
+   "device": "dirigera_platform:device-10_1",
+   "device_class": "battery",
+   "disabled_by": null,
+   "entity_category": "diagnostic",
+   "entity_id": "sensor.room_3_device_10",
+   "has_entity_name": false,
+   "hidden_by": null,
+   "original_name": "Device 10",
+   "translation_key": null,
+   "unit": "%"
+  },
+  "sensor|device-11_1BP01": {
+   "device": "dirigera_platform:device-11_1",
+   "device_class": "battery",
+   "disabled_by": null,
+   "entity_category": "diagnostic",
+   "entity_id": "sensor.room_4_device_11_battery_percentage",
+   "has_entity_name": true,
+   "hidden_by": null,
+   "original_name": "Battery Percentage",
+   "translation_key": null,
+   "unit": "%"
+  },
+  "sensor|device-13_1CA01": {
+   "device": "dirigera_platform:device-13",
+   "device_class": "current",
+   "disabled_by": null,
+   "entity_category": null,
+   "entity_id": "sensor.room_2_device_13_current",
+   "has_entity_name": true,
+   "hidden_by": null,
+   "original_name": "Current",
+   "translation_key": null,
+   "unit": "A"
+  },
+  "sensor|device-13_1CAP01": {
+   "device": "dirigera_platform:device-13",
+   "device_class": "power",
+   "disabled_by": null,
+   "entity_category": null,
+   "entity_id": "sensor.room_2_device_13_power",
+   "has_entity_name": true,
+   "hidden_by": null,
+   "original_name": "Power",
+   "translation_key": null,
+   "unit": "W"
+  },
+  "sensor|device-13_1CV01": {
+   "device": "dirigera_platform:device-13",
+   "device_class": "voltage",
+   "disabled_by": null,
+   "entity_category": null,
+   "entity_id": "sensor.room_2_device_13_voltage",
+   "has_entity_name": true,
+   "hidden_by": null,
+   "original_name": "Voltage",
+   "translation_key": null,
+   "unit": "V"
+  },
+  "sensor|device-13_1ELAR01": {
+   "device": "dirigera_platform:device-13",
+   "device_class": "energy",
+   "disabled_by": "integration",
+   "entity_category": null,
+   "entity_id": "sensor.room_2_device_13_energy_at_last_reset",
+   "has_entity_name": true,
+   "hidden_by": null,
+   "original_name": "Energy at last reset",
+   "translation_key": null,
+   "unit": "kWh"
+  },
+  "sensor|device-13_1TEC01": {
+   "device": "dirigera_platform:device-13",
+   "device_class": "energy",
+   "disabled_by": null,
+   "entity_category": null,
+   "entity_id": "sensor.room_2_device_13_energy",
+   "has_entity_name": true,
+   "hidden_by": null,
+   "original_name": "Energy",
+   "translation_key": null,
+   "unit": "kWh"
+  },
+  "sensor|device-13_1TECLU01": {
+   "device": "dirigera_platform:device-13",
+   "device_class": "timestamp",
+   "disabled_by": null,
+   "entity_category": null,
+   "entity_id": "sensor.room_2_device_13_total_energy_consumed_last_updated",
+   "has_entity_name": true,
+   "hidden_by": null,
+   "original_name": "Total Energy Consumed Last Updated",
+   "translation_key": null,
+   "unit": ""
+  },
+  "sensor|device-13_1TLER01": {
+   "device": "dirigera_platform:device-13",
+   "device_class": "timestamp",
+   "disabled_by": null,
+   "entity_category": null,
+   "entity_id": "sensor.room_2_device_13_time_of_last_energy_reset",
+   "has_entity_name": true,
+   "hidden_by": null,
+   "original_name": "Time of Last Energy Reset",
+   "translation_key": null,
+   "unit": ""
+  },
+  "sensor|device-14_1BP01": {
+   "device": "dirigera_platform:device-14_1",
+   "device_class": "battery",
+   "disabled_by": null,
+   "entity_category": "diagnostic",
+   "entity_id": "sensor.room_7_device_14_battery_percentage",
+   "has_entity_name": true,
+   "hidden_by": null,
+   "original_name": "Battery Percentage",
+   "translation_key": null,
+   "unit": "%"
+  },
+  "sensor|device-16_1": {
+   "device": "dirigera_platform:device-16_1",
+   "device_class": "battery",
+   "disabled_by": null,
+   "entity_category": "diagnostic",
+   "entity_id": "sensor.room_2_device_16",
+   "has_entity_name": false,
+   "hidden_by": null,
+   "original_name": "Device 16",
+   "translation_key": null,
+   "unit": "%"
+  },
+  "sensor|device-18_1CO2": {
+   "device": "dirigera_platform:device-18_1",
+   "device_class": "carbon_dioxide",
+   "disabled_by": null,
+   "entity_category": null,
+   "entity_id": "sensor.room_2_device_18_co2",
+   "has_entity_name": true,
+   "hidden_by": null,
+   "original_name": "CO2",
+   "translation_key": null,
+   "unit": "ppm"
+  },
+  "sensor|device-18_1CURPM25": {
+   "device": "dirigera_platform:device-18_1",
+   "device_class": "pm25",
+   "disabled_by": null,
+   "entity_category": null,
+   "entity_id": "sensor.room_2_device_18_current_pm2_5",
+   "has_entity_name": true,
+   "hidden_by": null,
+   "original_name": "Current PM2.5",
+   "translation_key": null,
+   "unit": "μg/m³"
+  },
+  "sensor|device-18_1HUM": {
+   "device": "dirigera_platform:device-18_1",
+   "device_class": "humidity",
+   "disabled_by": null,
+   "entity_category": null,
+   "entity_id": "sensor.room_2_device_18_humidity",
+   "has_entity_name": true,
+   "hidden_by": null,
+   "original_name": "Humidity",
+   "translation_key": null,
+   "unit": "%"
+  },
+  "sensor|device-18_1MAXPM25": {
+   "device": "dirigera_platform:device-18_1",
+   "device_class": "pm25",
+   "disabled_by": null,
+   "entity_category": null,
+   "entity_id": "sensor.room_2_device_18_max_measured_pm2_5",
+   "has_entity_name": true,
+   "hidden_by": null,
+   "original_name": "Max Measured PM2.5",
+   "translation_key": null,
+   "unit": "μg/m³"
+  },
+  "sensor|device-18_1MINPM25": {
+   "device": "dirigera_platform:device-18_1",
+   "device_class": "pm25",
+   "disabled_by": null,
+   "entity_category": null,
+   "entity_id": "sensor.room_2_device_18_min_measured_pm2_5",
+   "has_entity_name": true,
+   "hidden_by": null,
+   "original_name": "Min Measured PM2.5",
+   "translation_key": null,
+   "unit": "μg/m³"
+  },
+  "sensor|device-18_1TEMP": {
+   "device": "dirigera_platform:device-18_1",
+   "device_class": "temperature",
+   "disabled_by": null,
+   "entity_category": null,
+   "entity_id": "sensor.room_2_device_18_temperature",
+   "has_entity_name": true,
+   "hidden_by": null,
+   "original_name": "Temperature",
+   "translation_key": null,
+   "unit": "°C"
+  },
+  "sensor|device-20_1LUX": {
+   "device": "dirigera_platform:device-20",
+   "device_class": "illuminance",
+   "disabled_by": null,
+   "entity_category": null,
+   "entity_id": "sensor.(racy area)_device_20_illuminance",
+   "has_entity_name": true,
+   "hidden_by": null,
+   "original_name": "Illuminance",
+   "translation_key": null,
+   "unit": "lx"
+  },
+  "sensor|device-20_2BP01": {
+   "device": "dirigera_platform:device-20",
+   "device_class": "battery",
+   "disabled_by": null,
+   "entity_category": "diagnostic",
+   "entity_id": "sensor.(racy area)_device_20_battery_percentage",
+   "has_entity_name": true,
+   "hidden_by": null,
+   "original_name": "Battery Percentage",
+   "translation_key": null,
+   "unit": "%"
+  },
+  "switch|device-05_1": {
+   "device": "dirigera_platform:device-05",
+   "device_class": "outlet",
+   "disabled_by": null,
+   "entity_category": null,
+   "entity_id": "switch.room_4_device_5",
+   "has_entity_name": true,
+   "hidden_by": null,
+   "original_name": null,
+   "translation_key": null,
+   "unit": null
+  },
+  "switch|device-08_1": {
+   "device": "dirigera_platform:device-08_1",
+   "device_class": "outlet",
+   "disabled_by": null,
+   "entity_category": null,
+   "entity_id": "switch.room_2_device_8",
+   "has_entity_name": true,
+   "hidden_by": null,
+   "original_name": null,
+   "translation_key": null,
+   "unit": null
+  },
+  "switch|device-13_1": {
+   "device": "dirigera_platform:device-13",
+   "device_class": "outlet",
+   "disabled_by": null,
+   "entity_category": null,
+   "entity_id": "switch.room_2_device_13",
+   "has_entity_name": true,
+   "hidden_by": null,
+   "original_name": null,
+   "translation_key": null,
+   "unit": null
+  }
+ },
+ "hub_ids": {
+  "device-01_1": {
+   "attribute": "isOn",
+   "attribute_changes": {
+    "light|device-01_1": "on -> off"
+   },
+   "reachability_flipped": {
+    "light|device-01_1": "on -> unavailable"
+   },
+   "renamed": {
+    "device|dirigera_platform:device-01_1": "Device 1 -> Renamed device-01_1",
+    "light|device-01_1": [
+     "friendly_name"
+    ]
+   }
+  },
+  "device-02_1": {
+   "attribute": "isOn",
+   "attribute_changes": {
+    "light|device-02_1": "on -> off"
+   },
+   "reachability_flipped": {
+    "light|device-02_1": "on -> unavailable"
+   },
+   "renamed": {
+    "device|dirigera_platform:device-02_1": "Device 2 -> Renamed device-02_1",
+    "light|device-02_1": [
+     "friendly_name"
+    ]
+   }
+  },
+  "device-03_1": {
+   "attribute": "isOpen",
+   "attribute_changes": {
+    "binary_sensor|device-03_1": "off -> on"
+   },
+   "reachability_flipped": {
+    "binary_sensor|device-03_1": "off -> unavailable",
+    "sensor|device-03_1BP01": "100 -> unavailable"
+   },
+   "renamed": {
+    "binary_sensor|device-03_1": [
+     "friendly_name"
+    ],
+    "device|dirigera_platform:device-03_1": "Device 3 -> Renamed device-03_1",
+    "sensor|device-03_1BP01": [
+     "friendly_name"
+    ]
+   }
+  },
+  "device-04_1": {
+   "attribute": "illuminance",
+   "attribute_changes": {
+    "sensor|device-04_1LUX": "0 -> 1.0"
+   },
+   "reachability_flipped": {
+    "sensor|device-04_1LUX": "0 -> unavailable"
+   },
+   "renamed": {
+    "binary_sensor|device-04_2": [
+     "friendly_name"
+    ],
+    "device|dirigera_platform:device-04": "Device 4 -> Renamed device-04_1",
+    "sensor|device-04_1LUX": [
+     "friendly_name"
+    ],
+    "sensor|device-04_2BP01": [
+     "friendly_name"
+    ]
+   }
+  },
+  "device-04_2": {
+   "attribute": "isDetected",
+   "attribute_changes": {
+    "binary_sensor|device-04_2": "off -> on"
+   },
+   "reachability_flipped": {
+    "binary_sensor|device-04_2": "off -> unavailable",
+    "sensor|device-04_2BP01": "49 -> unavailable"
+   },
+   "renamed": {
+    "binary_sensor|device-04_2": [
+     "friendly_name"
+    ],
+    "device|dirigera_platform:device-04": "Device 4 -> Renamed device-04_2",
+    "sensor|device-04_1LUX": [
+     "friendly_name"
+    ],
+    "sensor|device-04_2BP01": [
+     "friendly_name"
+    ]
+   }
+  },
+  "device-05_1": {
+   "attribute": "isOn",
+   "attribute_changes": {
+    "sensor|device-05_1CA01": "0 -> 0.0",
+    "sensor|device-05_1CAP01": "0 -> 0.0",
+    "switch|device-05_1": "off -> on"
+   },
+   "reachability_flipped": {
+    "sensor|device-05_1CA01": "0 -> unavailable",
+    "sensor|device-05_1CAP01": "0 -> unavailable",
+    "sensor|device-05_1CV01": "237.0 -> unavailable",
+    "sensor|device-05_1TEC01": "1.77799999713898 -> unavailable",
+    "sensor|device-05_1TECLU01": "2026-11-08T12:25:32+00:00 -> unavailable",
+    "sensor|device-05_1TLER01": "2026-09-30T18:03:01+00:00 -> unavailable",
+    "switch|device-05_1": "off -> unavailable"
+   },
+   "renamed": {
+    "device|dirigera_platform:device-05": "Device 5 -> Renamed device-05_1",
+    "sensor|device-05_1CA01": [
+     "friendly_name"
+    ],
+    "sensor|device-05_1CAP01": [
+     "friendly_name"
+    ],
+    "sensor|device-05_1CV01": [
+     "friendly_name"
+    ],
+    "sensor|device-05_1TEC01": [
+     "friendly_name"
+    ],
+    "sensor|device-05_1TECLU01": [
+     "friendly_name"
+    ],
+    "sensor|device-05_1TLER01": [
+     "friendly_name"
+    ],
+    "switch|device-05_1": [
+     "friendly_name"
+    ]
+   }
+  },
+  "device-05_2": {
+   "attribute": "totalEnergyConsumed",
+   "attribute_changes": {
+    "sensor|device-05_1TEC01": "1.77799999713898 -> 2.77799999713898"
+   },
+   "not_back_after_restore": {
+    "sensor|device-05_1TEC01": "1.77799999713898 -> 2.77799999713898"
+   },
+   "reachability_flipped": {
+    "sensor|device-05_1CA01": "0 -> unavailable",
+    "sensor|device-05_1CAP01": "0 -> unavailable",
+    "sensor|device-05_1CV01": "237.0 -> unavailable",
+    "sensor|device-05_1TEC01": "1.77799999713898 -> unavailable",
+    "sensor|device-05_1TECLU01": "2026-11-08T12:25:32+00:00 -> unavailable",
+    "sensor|device-05_1TLER01": "2026-09-30T18:03:01+00:00 -> unavailable",
+    "switch|device-05_1": "off -> unavailable"
+   },
+   "renamed": {}
+  },
+  "device-06_3": {
+   "attribute": "batteryPercentage",
+   "attribute_changes": {
+    "sensor|device-06_3": "0 -> -1"
+   },
+   "reachability_flipped": {
+    "sensor|device-06_3": "unavailable -> 0"
+   },
+   "renamed": {
+    "device|dirigera_platform:device-06": "Device 6 -> Renamed device-06_3",
+    "sensor|device-06_3": [
+     "friendly_name"
+    ]
+   }
+  },
+  "device-06_6": {
+   "attribute": "batteryPercentage",
+   "attribute_changes": {
+    "sensor|device-06_3": "0 -> -1"
+   },
+   "reachability_flipped": {
+    "sensor|device-06_3": "unavailable -> 0"
+   },
+   "renamed": {}
+  },
+  "device-06_9": {
+   "attribute": "batteryPercentage",
+   "attribute_changes": {
+    "sensor|device-06_3": "0 -> -1"
+   },
+   "reachability_flipped": {
+    "sensor|device-06_3": "unavailable -> 0"
+   },
+   "renamed": {}
+  },
+  "device-07_1": {
+   "attribute": "waterLeakDetected",
+   "attribute_changes": {
+    "binary_sensor|device-07_1": "off -> on"
+   },
+   "reachability_flipped": {
+    "binary_sensor|device-07_1": "off -> unavailable",
+    "sensor|device-07_1BP01": "49 -> unavailable"
+   },
+   "renamed": {
+    "binary_sensor|device-07_1": [
+     "friendly_name"
+    ],
+    "device|dirigera_platform:device-07_1": "Device 7 -> Renamed device-07_1",
+    "sensor|device-07_1BP01": [
+     "friendly_name"
+    ]
+   }
+  },
+  "device-08_1": {
+   "attribute": "isOn",
+   "attribute_changes": {
+    "switch|device-08_1": "off -> on"
+   },
+   "reachability_flipped": {
+    "switch|device-08_1": "off -> unavailable"
+   },
+   "renamed": {
+    "device|dirigera_platform:device-08_1": "Device 8 -> Renamed device-08_1",
+    "switch|device-08_1": [
+     "friendly_name"
+    ]
+   }
+  },
+  "device-09_1": {
+   "attribute": "illuminance",
+   "attribute_changes": {
+    "sensor|device-09_1LUX": "0 -> 1.0"
+   },
+   "reachability_flipped": {
+    "sensor|device-09_1LUX": "0 -> unavailable"
+   },
+   "renamed": {
+    "binary_sensor|device-09_2": [
+     "friendly_name"
+    ],
+    "device|dirigera_platform:device-09": "Device 9 -> Renamed device-09_1",
+    "sensor|device-09_1LUX": [
+     "friendly_name"
+    ],
+    "sensor|device-09_2BP01": [
+     "friendly_name"
+    ]
+   }
+  },
+  "device-09_2": {
+   "attribute": "isDetected",
+   "attribute_changes": {
+    "binary_sensor|device-09_2": "off -> on"
+   },
+   "reachability_flipped": {
+    "binary_sensor|device-09_2": "off -> unavailable",
+    "sensor|device-09_2BP01": "96 -> unavailable"
+   },
+   "renamed": {
+    "binary_sensor|device-09_2": [
+     "friendly_name"
+    ],
+    "device|dirigera_platform:device-09": "Device 9 -> Renamed device-09_2",
+    "sensor|device-09_1LUX": [
+     "friendly_name"
+    ],
+    "sensor|device-09_2BP01": [
+     "friendly_name"
+    ]
+   }
+  },
+  "device-10_1": {
+   "attribute": "batteryPercentage",
+   "attribute_changes": {
+    "sensor|device-10_1": "58 -> 57"
+   },
+   "reachability_flipped": {
+    "sensor|device-10_1": "58 -> unavailable"
+   },
+   "renamed": {
+    "device|dirigera_platform:device-10_1": "Device 10 -> Renamed device-10_1",
+    "sensor|device-10_1": [
+     "friendly_name"
+    ]
+   }
+  },
+  "device-11_1": {
+   "attribute": "isOpen",
+   "attribute_changes": {
+    "binary_sensor|device-11_1": "off -> on"
+   },
+   "reachability_flipped": {
+    "binary_sensor|device-11_1": "off -> unavailable",
+    "sensor|device-11_1BP01": "100 -> unavailable"
+   },
+   "renamed": {
+    "binary_sensor|device-11_1": [
+     "friendly_name"
+    ],
+    "device|dirigera_platform:device-11_1": "Device 11 -> Renamed device-11_1",
+    "sensor|device-11_1BP01": [
+     "friendly_name"
+    ]
+   }
+  },
+  "device-12_1": {
+   "attribute": "isOn",
+   "attribute_changes": {
+    "light|device-12_1": "on -> off"
+   },
+   "reachability_flipped": {
+    "light|device-12_1": "on -> unavailable"
+   },
+   "renamed": {
+    "device|dirigera_platform:device-12_1": "Device 12 -> Renamed device-12_1",
+    "light|device-12_1": [
+     "friendly_name"
+    ]
+   }
+  },
+  "device-13_1": {
+   "attribute": "isOn",
+   "attribute_changes": {
+    "sensor|device-13_1CA01": "0.0260000005364418 -> 0",
+    "sensor|device-13_1CAP01": "0.600000023841858 -> 0",
+    "switch|device-13_1": "on -> off"
+   },
+   "reachability_flipped": {
+    "sensor|device-13_1CA01": "unavailable -> 0.0260000005364418",
+    "sensor|device-13_1CAP01": "unavailable -> 0.600000023841858",
+    "sensor|device-13_1CV01": "unavailable -> 237.0",
+    "sensor|device-13_1TEC01": "unavailable -> 0.0140000004321337",
+    "sensor|device-13_1TECLU01": "unavailable -> 2026-09-30T20:55:01+00:00",
+    "sensor|device-13_1TLER01": "unavailable -> 2026-09-30T18:16:30+00:00",
+    "switch|device-13_1": "unavailable -> on"
+   },
+   "renamed": {
+    "device|dirigera_platform:device-13": "Device 13 -> Renamed device-13_1",
+    "sensor|device-13_1CA01": [
+     "friendly_name"
+    ],
+    "sensor|device-13_1CAP01": [
+     "friendly_name"
+    ],
+    "sensor|device-13_1CV01": [
+     "friendly_name"
+    ],
+    "sensor|device-13_1TEC01": [
+     "friendly_name"
+    ],
+    "sensor|device-13_1TECLU01": [
+     "friendly_name"
+    ],
+    "sensor|device-13_1TLER01": [
+     "friendly_name"
+    ],
+    "switch|device-13_1": [
+     "friendly_name"
+    ]
+   }
+  },
+  "device-13_2": {
+   "attribute": "totalEnergyConsumed",
+   "attribute_changes": {
+    "sensor|device-13_1TEC01": "0.0140000004321337 -> 1.01400000043213"
+   },
+   "reachability_flipped": {
+    "sensor|device-13_1CA01": "unavailable -> 0.0260000005364418",
+    "sensor|device-13_1CAP01": "unavailable -> 0.600000023841858",
+    "sensor|device-13_1CV01": "unavailable -> 237.0",
+    "sensor|device-13_1TEC01": "unavailable -> 0.0140000004321337",
+    "sensor|device-13_1TECLU01": "unavailable -> 2026-09-30T20:55:01+00:00",
+    "sensor|device-13_1TLER01": "unavailable -> 2026-09-30T18:16:30+00:00",
+    "switch|device-13_1": "unavailable -> on"
+   },
+   "renamed": {}
+  },
+  "device-14_1": {
+   "attribute": "isOpen",
+   "attribute_changes": {
+    "binary_sensor|device-14_1": "off -> on"
+   },
+   "reachability_flipped": {
+    "binary_sensor|device-14_1": "off -> unavailable",
+    "sensor|device-14_1BP01": "45 -> unavailable"
+   },
+   "renamed": {
+    "binary_sensor|device-14_1": [
+     "friendly_name"
+    ],
+    "device|dirigera_platform:device-14_1": "Device 14 -> Renamed device-14_1",
+    "sensor|device-14_1BP01": [
+     "friendly_name"
+    ]
+   }
+  },
+  "device-15_1": {
+   "attribute": "isOn",
+   "attribute_changes": {
+    "light|device-15_1": "on -> off"
+   },
+   "reachability_flipped": {
+    "light|device-15_1": "on -> unavailable"
+   },
+   "renamed": {
+    "device|dirigera_platform:device-15_1": "Device 15 -> Renamed device-15_1",
+    "light|device-15_1": [
+     "friendly_name"
+    ]
+   }
+  },
+  "device-16_1": {
+   "attribute": "batteryPercentage",
+   "attribute_changes": {
+    "sensor|device-16_1": "70 -> 69"
+   },
+   "reachability_flipped": {
+    "sensor|device-16_1": "70 -> unavailable"
+   },
+   "renamed": {
+    "device|dirigera_platform:device-16_1": "Device 16 -> Renamed device-16_1",
+    "sensor|device-16_1": [
+     "friendly_name"
+    ]
+   }
+  },
+  "device-17_1": {
+   "attribute": "isOn",
+   "attribute_changes": {
+    "light|device-17_1": "on -> off"
+   },
+   "reachability_flipped": {
+    "light|device-17_1": "on -> unavailable"
+   },
+   "renamed": {
+    "device|dirigera_platform:device-17_1": "Device 17 -> Renamed device-17_1",
+    "light|device-17_1": [
+     "friendly_name"
+    ]
+   }
+  },
+  "device-18_1": {
+   "attribute": "currentTemperature",
+   "attribute_changes": {
+    "sensor|device-18_1TEMP": "18.5900001525879 -> 19.5900001525879"
+   },
+   "reachability_flipped": {
+    "sensor|device-18_1CO2": "887 -> unavailable",
+    "sensor|device-18_1CURPM25": "0 -> unavailable",
+    "sensor|device-18_1HUM": "52 -> unavailable",
+    "sensor|device-18_1MAXPM25": "1000 -> unavailable",
+    "sensor|device-18_1MINPM25": "0 -> unavailable",
+    "sensor|device-18_1TEMP": "18.5900001525879 -> unavailable"
+   },
+   "renamed": {
+    "device|dirigera_platform:device-18_1": "Device 18 -> Renamed device-18_1",
+    "sensor|device-18_1CO2": [
+     "friendly_name"
+    ],
+    "sensor|device-18_1CURPM25": [
+     "friendly_name"
+    ],
+    "sensor|device-18_1HUM": [
+     "friendly_name"
+    ],
+    "sensor|device-18_1MAXPM25": [
+     "friendly_name"
+    ],
+    "sensor|device-18_1MINPM25": [
+     "friendly_name"
+    ],
+    "sensor|device-18_1TEMP": [
+     "friendly_name"
+    ]
+   }
+  },
+  "device-19_1": {
+   "reachability_flipped": {},
+   "renamed": {}
+  },
+  "device-20_1": {
+   "attribute": "illuminance",
+   "attribute_changes": {
+    "sensor|device-20_1LUX": "0 -> 1.0"
+   },
+   "reachability_flipped": {
+    "sensor|device-20_1LUX": "0 -> unavailable"
+   },
+   "renamed": {
+    "binary_sensor|device-20_2": [
+     "friendly_name"
+    ],
+    "device|dirigera_platform:device-20": "Device 20 -> Renamed device-20_1",
+    "sensor|device-20_1LUX": [
+     "friendly_name"
+    ],
+    "sensor|device-20_2BP01": [
+     "friendly_name"
+    ]
+   }
+  },
+  "device-20_2": {
+   "attribute": "isDetected",
+   "attribute_changes": {
+    "binary_sensor|device-20_2": "off -> on"
+   },
+   "reachability_flipped": {
+    "binary_sensor|device-20_2": "off -> unavailable",
+    "sensor|device-20_2BP01": "33 -> unavailable"
+   },
+   "renamed": {
+    "binary_sensor|device-20_2": [
+     "friendly_name"
+    ],
+    "device|dirigera_platform:device-20": "Device 20 -> Renamed device-20_2",
+    "sensor|device-20_1LUX": [
+     "friendly_name"
+    ],
+    "sensor|device-20_2BP01": [
+     "friendly_name"
+    ]
+   }
+  }
+ },
+ "hub_writes": [],
+ "presses": {
+  "device-06_1 doublePress": [],
+  "device-06_1 longPress": [],
+  "device-06_1 singlePress": [],
+  "device-06_3 doublePress": [],
+  "device-06_3 longPress": [],
+  "device-06_3 singlePress": [],
+  "device-06_6 doublePress": [],
+  "device-06_6 longPress": [],
+  "device-06_6 singlePress": [],
+  "device-06_9 doublePress": [],
+  "device-06_9 longPress": [],
+  "device-06_9 singlePress": [],
+  "device-10_1 doublePress": [
+   {
+    "device": "dirigera_platform:device-10_1",
+    "entity": "sensor|device-10_1",
+    "offered": true,
+    "type": "button1_double_click"
+   }
+  ],
+  "device-10_1 longPress": [
+   {
+    "device": "dirigera_platform:device-10_1",
+    "entity": "sensor|device-10_1",
+    "offered": true,
+    "type": "button1_long_press"
+   }
+  ],
+  "device-10_1 singlePress": [
+   {
+    "device": "dirigera_platform:device-10_1",
+    "entity": "sensor|device-10_1",
+    "offered": true,
+    "type": "button1_single_click"
+   }
+  ],
+  "device-10_2 doublePress": [
+   {
+    "device": "dirigera_platform:device-10_1",
+    "entity": "sensor|device-10_1",
+    "offered": true,
+    "type": "button2_double_click"
+   }
+  ],
+  "device-10_2 longPress": [
+   {
+    "device": "dirigera_platform:device-10_1",
+    "entity": "sensor|device-10_1",
+    "offered": true,
+    "type": "button2_long_press"
+   }
+  ],
+  "device-10_2 singlePress": [
+   {
+    "device": "dirigera_platform:device-10_1",
+    "entity": "sensor|device-10_1",
+    "offered": true,
+    "type": "button2_single_click"
+   }
+  ],
+  "device-16_1 doublePress": [
+   {
+    "device": "dirigera_platform:device-16_1",
+    "entity": "sensor|device-16_1",
+    "offered": true,
+    "type": "button1_double_click"
+   }
+  ],
+  "device-16_1 longPress": [
+   {
+    "device": "dirigera_platform:device-16_1",
+    "entity": "sensor|device-16_1",
+    "offered": true,
+    "type": "button1_long_press"
+   }
+  ],
+  "device-16_1 singlePress": [
+   {
+    "device": "dirigera_platform:device-16_1",
+    "entity": "sensor|device-16_1",
+    "offered": true,
+    "type": "button1_single_click"
+   }
+  ],
+  "device-16_2 doublePress": [
+   {
+    "device": "dirigera_platform:device-16_1",
+    "entity": "sensor|device-16_1",
+    "offered": true,
+    "type": "button2_double_click"
+   }
+  ],
+  "device-16_2 longPress": [
+   {
+    "device": "dirigera_platform:device-16_1",
+    "entity": "sensor|device-16_1",
+    "offered": true,
+    "type": "button2_long_press"
+   }
+  ],
+  "device-16_2 singlePress": [
+   {
+    "device": "dirigera_platform:device-16_1",
+    "entity": "sensor|device-16_1",
+    "offered": true,
+    "type": "button2_single_click"
+   }
+  ],
+  "device-16_3 doublePress": [
+   {
+    "device": "dirigera_platform:device-16_1",
+    "entity": "sensor|device-16_1",
+    "offered": true,
+    "type": "button3_double_click"
+   }
+  ],
+  "device-16_3 longPress": [
+   {
+    "device": "dirigera_platform:device-16_1",
+    "entity": "sensor|device-16_1",
+    "offered": true,
+    "type": "button3_long_press"
+   }
+  ],
+  "device-16_3 singlePress": [
+   {
+    "device": "dirigera_platform:device-16_1",
+    "entity": "sensor|device-16_1",
+    "offered": true,
+    "type": "button3_single_click"
+   }
+  ],
+  "device-16_4 doublePress": [
+   {
+    "device": "dirigera_platform:device-16_1",
+    "entity": "sensor|device-16_1",
+    "offered": true,
+    "type": "button4_double_click"
+   }
+  ],
+  "device-16_4 longPress": [
+   {
+    "device": "dirigera_platform:device-16_1",
+    "entity": "sensor|device-16_1",
+    "offered": true,
+    "type": "button4_long_press"
+   }
+  ],
+  "device-16_4 singlePress": [
+   {
+    "device": "dirigera_platform:device-16_1",
+    "entity": "sensor|device-16_1",
+    "offered": true,
+    "type": "button4_single_click"
+   }
+  ]
+ },
+ "triggers": {
+  "dirigera_platform:device-01_1": [
+   "turned_off @ light|device-01_1",
+   "turned_on @ light|device-01_1"
+  ],
+  "dirigera_platform:device-02_1": [
+   "turned_off @ light|device-02_1",
+   "turned_on @ light|device-02_1"
+  ],
+  "dirigera_platform:device-06": [
+   "button1_double_click @ sensor|device-06_3",
+   "button1_long_press @ sensor|device-06_3",
+   "button1_single_click @ sensor|device-06_3"
+  ],
+  "dirigera_platform:device-10_1": [
+   "button1_double_click @ sensor|device-10_1",
+   "button1_long_press @ sensor|device-10_1",
+   "button1_single_click @ sensor|device-10_1",
+   "button2_double_click @ sensor|device-10_1",
+   "button2_long_press @ sensor|device-10_1",
+   "button2_single_click @ sensor|device-10_1"
+  ],
+  "dirigera_platform:device-12_1": [
+   "turned_off @ light|device-12_1",
+   "turned_on @ light|device-12_1"
+  ],
+  "dirigera_platform:device-15_1": [
+   "turned_off @ light|device-15_1",
+   "turned_on @ light|device-15_1"
+  ],
+  "dirigera_platform:device-16_1": [
+   "button1_double_click @ sensor|device-16_1",
+   "button1_long_press @ sensor|device-16_1",
+   "button1_single_click @ sensor|device-16_1",
+   "button2_double_click @ sensor|device-16_1",
+   "button2_long_press @ sensor|device-16_1",
+   "button2_single_click @ sensor|device-16_1",
+   "button3_double_click @ sensor|device-16_1",
+   "button3_long_press @ sensor|device-16_1",
+   "button3_single_click @ sensor|device-16_1",
+   "button4_double_click @ sensor|device-16_1",
+   "button4_long_press @ sensor|device-16_1",
+   "button4_single_click @ sensor|device-16_1"
+  ],
+  "dirigera_platform:device-17_1": [
+   "turned_off @ light|device-17_1",
+   "turned_on @ light|device-17_1"
+  ],
+  "dirigera_platform:set-01": [
+   "turned_off @ light|set-01",
+   "turned_on @ light|set-01"
+  ],
+  "dirigera_platform:set-02": [
+   "turned_off @ light|set-02",
+   "turned_on @ light|set-02"
+  ]
+ },
+ "unknown_hub_routes": []
+}

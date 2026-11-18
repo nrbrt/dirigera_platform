@@ -28,7 +28,9 @@ from dirigera.devices.light_sensor import LightSensor
 from dirigera.devices.controller import Controller
 from dirigera.devices.air_purifier import FanModeEnum
 
-from .hub_event_listener import hub_event_listener, registry_entry, live_writes, replace_model
+from .hub_event_listener import (
+    hub_event_listener, registry_entry, live_writes, replace_model, note_command,
+)
 from .hub_writer import writer_for
 from .const import DOMAIN, DEFAULT_POWER_PUSH_THROTTLE
 from .compat import MICROGRAMS_PER_CUBIC_METER, PARTS_PER_MILLION
@@ -53,6 +55,13 @@ def make_property(class_to_induce, name, value):
     setattr(class_to_induce, name, property(lambda self: getattr(self._json_data.attributes,name)))
 
 class ikea_base_device:
+    # Whether Home Assistant polls this device type: every polled entity
+    # fetches its device from the hub, every 15-30 s. With many devices that
+    # load made the hub unresponsive (#207), and nearly everything arrives
+    # over the WebSocket anyway. So polling is off unless a device type sets
+    # this, with the reason next to it.
+    polls_hub = False
+
     def __init__(self, hass, hub, json_data, get_by_id_fx) -> None:
         logger.debug("ikea_base_device ctor...")
         self._hass = hass 
@@ -75,6 +84,10 @@ class ikea_base_device:
 
     @property
     def skip_update(self)->bool:
+        # True for a device that never fetches itself from the hub: all it
+        # knows arrives over the WebSocket, and async_update (also when asked
+        # for with homeassistant.update_entity) returns at once. Whether Home
+        # Assistant polls is polls_hub.
         return self._skip_update
     
     @skip_update.setter
@@ -83,10 +96,9 @@ class ikea_base_device:
 
     @property
     def should_poll(self) -> bool:
-        # A device that skips its update never fetches from the hub; all it
-        # knows arrives over the WebSocket, so a poll has nothing to refresh.
-        # The entities of the device take their should_poll from here.
-        return not self._skip_update
+        # Only a device type that asks for it. The entities of the device
+        # take their should_poll from here.
+        return self.polls_hub
         
     def add_listener(self, entity : Entity) -> None:
         self._listeners.append(entity)
@@ -244,9 +256,16 @@ class ikea_base_device:
         model on top of the setter. A command that fails writes nothing.
 
         Every command method of a device goes through here."""
-        result = await writer_for(self._hub).run(fn, *args)
+        # Noted when the request goes out (started, on the loop) and again
+        # after it: the setter writes the model in the writer's executor
+        # thread, so an older resync snapshot can be applied on the loop
+        # before this resumes, and it must not win (#207). The second note is
+        # for a fetch that began while the request was out. Same rule as
+        # ikea_bulb._send.
+        result = await writer_for(self._hub).run(fn, *args, started=lambda: note_command(self))
         if accepted is not None:
             accepted()
+        note_command(self)
         self.async_schedule_update_ha_state(False)
         return result
 
@@ -349,9 +368,9 @@ class ikea_base_device_sensor():
 
     @property
     def should_poll(self) -> bool:
-        # Polled only when the device has something to fetch. A class whose
-        # value arrives by push although its device does fetch (environment
-        # sensors) opts out with _attr_should_poll = False.
+        # Polled only when the device type polls (polls_hub). A class whose
+        # value arrives by push can also opt out itself with
+        # _attr_should_poll = False.
         return self._attr_should_poll and self._device.should_poll
 
     @property
@@ -523,14 +542,30 @@ class ikea_water_sensor(ikea_base_device_sensor, BinarySensorEntity):
         return self._device.water_leak_detected
          
 class ikea_blinds_device(ikea_base_device):
+    # Not polled (#207): the reporter of #207 ran 89 blinds without polling
+    # and their state stayed right; not measured here, as there are no blinds
+    # to test with. The safety net (hub_event_listener.SAFETY_NET_INTERVAL)
+    # catches what an event misses.
     BLINDS_STATE_STOPPED = "stopped"
+    OPENING = "opening"
+    CLOSING = "closing"
+    # Without a level report for this long, a moving blind is open or closed
+    # again, and a stopped one has stopped coasting (#207). Short: a moving
+    # blind reports its level often.
+    SETTLE_SECONDS = 5
 
     def __init__(self, hass:core.HomeAssistant, hub:Hub, blind:Blind):
         logger.debug("IkeaBlinds ctor...")
         super().__init__(hass, hub, blind, hub.get_blinds_by_id)
-        # Set by async_stop_cover, see stop_requested for why it exists.
+        # Set by a stop the hub accepted, see stop_requested.
         self._stop_requested = False
         self._stop_target_level = None
+        # Which way the blind is moving (#207), from what it does: the change
+        # in its current level, or a command. None when it is not moving.
+        self._direction = None
+        # Ends a movement, or the window after a stop, without level reports.
+        self._settle_handle = None
+        self._seen_level, self._seen_target = self._levels()
     
     @property
     def device_class(self) -> str:
@@ -543,28 +578,131 @@ class ikea_blinds_device(ikea_base_device):
 
     @property
     def stop_requested(self) -> bool:
-        """True while the blind should be treated as standing still after a stop."""
+        """True in the window after a stop, while the blind may still coast.
+
+        Level reports in it are no movement. It ends SETTLE_SECONDS after the
+        stop, or at once with a new target or a move command. Fixed rather
+        than restarted by each report, so a move begun with the remote in it
+        is late by at most that much; how far a blind coasts is not measured,
+        so there is no distance rule."""
         if (self._stop_requested
                 and self._json_data.attributes.blinds_target_level != self._stop_target_level):
             self._stop_requested = False
         return self._stop_requested
 
+    @property
+    def direction(self) -> str | None:
+        """OPENING, CLOSING, or None when the blind is not moving."""
+        return self._direction
+
+    # --- the direction (#207) ---------------------------------------------
+    #
+    # The target level cannot tell: a blind moved with its remote changes
+    # only its current level, and the target of an earlier command stays.
+    # The hub's levels run from 0 (open) to 100 (closed), so a rising
+    # current level is closing.
+
+    def async_schedule_update_ha_state(self, force_refresh: bool = False) -> None:
+        # Every hub event and every command of this device ends here.
+        self._observe_movement()
+        super().async_schedule_update_ha_state(force_refresh)
+
+    async def async_update(self):
+        # Blinds are not polled; this is homeassistant.update_entity. The
+        # fetched model is a snapshot like a resync's: what changed before it
+        # is not a movement now. Home Assistant writes only the entity it
+        # updated, which may be the battery sensor, so all are written here.
+        await super().async_update()
+        self.state_resynced()
+        super().async_schedule_update_ha_state(False)
+
+    def state_resynced(self) -> None:
+        """The model was refreshed from a snapshot of the hub: a resync (after
+        a reconnect, or the safety net) or update_entity.
+
+        What changed before the snapshot already happened: it is not a
+        movement now, and the next move starts from here."""
+        self._seen_level, self._seen_target = self._levels()
+
+    def _levels(self):
+        """(current, target) as the hub reported them; None until it did."""
+        attributes = self._json_data.attributes
+        return (getattr(attributes, "blinds_current_level", None),
+                getattr(attributes, "blinds_target_level", None))
+
+    def _observe_movement(self) -> None:
+        level, target = self._levels()
+        seen_level, seen_target = self._seen_level, self._seen_target
+        self._seen_level, self._seen_target = level, target
+        if self.stop_requested:
+            # Coasting. Its reports do not extend the window: a move started
+            # with the remote meanwhile gets its direction when it ends.
+            return
+        if level is not None and seen_level is not None and level != seen_level:
+            if level == target:
+                self._set_direction(None)  # arrived
+            else:
+                self._set_direction(self.CLOSING if level > seen_level else self.OPENING)
+        elif target is not None and target != seen_target:
+            # A new target from the hub (the IKEA app, another controller).
+            self._set_direction(self._direction_to(target))
+
+    def _direction_to(self, target) -> str | None:
+        level = self._levels()[0]
+        if target is None or level is None or target == level:
+            return None
+        return self.CLOSING if target > level else self.OPENING
+
+    def _set_direction(self, direction) -> None:
+        self._direction = direction
+        if direction is None:
+            self.cancel_settle()
+        else:
+            self._arm_settle()
+
+    def _arm_settle(self) -> None:
+        self.cancel_settle()
+        self._settle_handle = self._hass.loop.call_later(self.SETTLE_SECONDS, self._settled)
+
+    def _settled(self) -> None:
+        self._settle_handle = None
+        self._direction = None
+        self._stop_requested = False
+        # Not through our own override: nothing new was reported to observe.
+        super().async_schedule_update_ha_state(False)
+
+    def cancel_settle(self) -> None:
+        if self._settle_handle is not None:
+            self._settle_handle.cancel()
+            self._settle_handle = None
+
+    def _moving_to(self, target):
+        """For a command: once the hub accepted it, the blind is on its way."""
+        def accepted():
+            self._stop_requested = False
+            self._set_direction(self._direction_to(target))
+        return accepted
+
+    # --- commands -----------------------------------------------------------
+
     def _send_stop(self) -> None:
         """Blocking: ask the hub to halt the blind. Run by the hub's writer."""
         self._json_data.set_state(BlindsStateEnum.STOPPED)
+
+    async def _move(self, level: int) -> None:
+        # The stop ends only when the hub accepted the move (_moving_to).
+        await self._command(self._json_data.set_target_level, level,
+                            accepted=self._moving_to(level))
     
     async def async_open_cover(self):
-        self._stop_requested = False
-        await self._command(self._json_data.set_target_level, 0)
+        await self._move(0)
 
     async def async_close_cover(self):
-        self._stop_requested = False
-        await self._command(self._json_data.set_target_level, 100)
+        await self._move(100)
 
     async def async_set_cover_position(self, position:int):
         if position >= 0 and position <= 100:
-            self._stop_requested = False
-            await self._command(self._json_data.set_target_level,100 - position)
+            await self._move(100 - position)
 
     async def async_stop_cover(self):
         if not self.can_stop:
@@ -577,6 +715,8 @@ class ikea_blinds_device(ikea_base_device):
         self._stop_target_level = attributes.blinds_target_level
         self._stop_requested = True
         attributes.blinds_state = self.BLINDS_STATE_STOPPED
+        self._direction = None
+        self._arm_settle()  # the window in which the blind may coast
     
 class ikea_blinds_sensor(ikea_base_device_sensor, CoverEntity):
     def __init__(self, device:ikea_blinds_device):
@@ -621,29 +761,16 @@ class ikea_blinds_sensor(ikea_base_device_sensor, CoverEntity):
 
     @property
     def is_closing(self):
-        if self._device.stop_requested:
-            return False
-
-        if self.current_cover_position is None or self.target_cover_position is None:
-            return False
-
-        if self.current_cover_position != 0 and self.target_cover_position == 0:
-            return True
-
-        return False
+        return self._device.direction == self._device.CLOSING
 
     @property
     def is_opening(self):
-        if self._device.stop_requested:
-            return False
+        return self._device.direction == self._device.OPENING
 
-        if self.current_cover_position is None or self.target_cover_position is None:
-            return False
-
-        if self.current_cover_position != 100 and self.target_cover_position == 100:
-            return True
-
-        return False
+    async def async_will_remove_from_hass(self) -> None:
+        # A pending return to open/closed must not write to a removed entity.
+        self._device.cancel_settle()
+        await super().async_will_remove_from_hass()
 
     async def async_open_cover(self, **kwargs):
         await self._device.async_open_cover()
@@ -659,12 +786,21 @@ class ikea_blinds_sensor(ikea_base_device_sensor, CoverEntity):
         await self._device.async_stop_cover()
 
 class ikea_vindstyrka_device(ikea_base_device):
+    # Not polled (#207). Measured 18-11-2026 on an ALPSTUGA (Matter): about
+    # one event every 30 s with currentTemperature, currentRH, currentCO2,
+    # and currentPM25 when it changed. maxMeasuredPM25 and minMeasuredPM25
+    # never came in an event; on the hub they are the fixed range of the
+    # sensor (1000 and 0), so the fetch at setup has them. A VINDSTYRKA
+    # (same deviceType) is NOT measured: the safety net
+    # (hub_event_listener.SAFETY_NET_INTERVAL) covers it.
+
     def __init__(self, hass:core.HomeAssistant, hub:Hub , json_data:EnvironmentSensor) -> None:
         super().__init__(hass, hub, json_data, hub.get_environment_sensor_by_id)
 
     async def async_update(self):
-        # Shared multi-entity throttle+lock: one hub request per device per 30s.
-        # See ikea_base_device._throttled_update for the rationale (issue #34).
+        # Not polled any more (#207): this runs only for
+        # homeassistant.update_entity. Shared multi-entity throttle+lock: one
+        # hub request per device per 30s (_throttled_update, issue #34).
         await self._throttled_update()
 
 class ikea_vindstyrka_temperature(ikea_base_device_sensor, SensorEntity):
@@ -714,14 +850,10 @@ class WhichPM25(Enum):
     MAX = 2
 
 class ikea_vindstyrka_pm25(ikea_base_device_sensor, SensorEntity):
-    # #40: only CURRENT PM2.5 rides the WebSocket push (currentPM25 is in the
-    # allowlist); MIN/MAX measured values are refreshed only by the poll fetch,
-    # so they must keep polling. The throttle applies to the pushed CURRENT.
+    # CURRENT PM2.5 is pushed; MIN/MAX are the fixed range of the sensor and
+    # never change (#207, see ikea_vindstyrka_device). None of them is
+    # polled. The throttle applies to the pushed CURRENT.
     _ha_push_throttle_seconds: int = DEFAULT_POWER_PUSH_THROTTLE
-
-    @property
-    def should_poll(self) -> bool:
-        return self._pm25_type != WhichPM25.CURRENT
 
     def __init__(
         self, device: ikea_vindstyrka_device, pm25_type: WhichPM25
@@ -860,6 +992,11 @@ class ikea_controller_device(ikea_base_device, SensorEntity):
         pass
 
 class ikea_starkvind_air_purifier_device(ikea_base_device):
+    # Still polled: not measured whether every value of an air purifier
+    # arrives over the WebSocket (#207). Its entities share one throttled
+    # fetch (async_update -> _throttled_update), not one each.
+    polls_hub = True
+
     def __init__(self, hass, hub, json_data) -> None:
         logger.debug("Air purifer Fan device ctor ...")
         super().__init__(hass, hub, json_data, hub.get_air_purifier_by_id)

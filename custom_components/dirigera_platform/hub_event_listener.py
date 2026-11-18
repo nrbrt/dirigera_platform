@@ -62,6 +62,13 @@ controller_trigger_last_time_map = {}
 # HA device ids of remotes seen sending remotePressEvent (see _fire_controller_event).
 remotes_with_press_events = set()
 DEBOUNCE_DELTA = datetime.timedelta(seconds=1)
+# Seconds between two runs of the safety net (#207): one GET /devices for the
+# whole hub, applied like the reconnect resync. Entities are not polled one by
+# one any more (that load made a hub with many devices unresponsive); this
+# catches what an event did not bring. Five minutes is what the reporter of
+# #207 ran with 150 entities, and one request per five minutes is nothing for
+# the hub.
+SAFETY_NET_INTERVAL = 5 * 60
 # A scene trigger whose time is older than this, relative to the sceneUpdated
 # message, belongs to an earlier press.
 STALE_TRIGGER_DELTA = datetime.timedelta(seconds=5)
@@ -122,7 +129,7 @@ def _field_value(model, name, raw):
 # dips to 5 kWh for 137 ms injected 5.982 kWh into the statistics three times in
 # two weeks; on a plug sitting at 263 kWh one dip would inject 263 kWh.
 #
-# The reconnect resync added for #39 replays raw /devices through this same
+# The resync (after a reconnect, #39, and the safety net, #207) replays raw /devices through this same
 # event path, and that bypasses the electricalSensor merge that get_outlets()
 # applies for split plugs (GRILLPLATS, TOFSMYGGA), so a stale or coarser value
 # can reach the entity there.
@@ -228,7 +235,15 @@ def _hold_back_energy_decrease(entity, key_attr, value_to_set) -> bool:
 #
 # * a refresh of one device, which replaces the entity's model, carries the
 #   values written meanwhile over to the new model (replace_model);
-# * the reconnect resync leaves them out of the device's row of the snapshot.
+# * the resync (after a reconnect, or the safety net) leaves them out of the
+#   device's row of the snapshot.
+#
+# Commands write models too (the library's setters, a light's accepted
+# values). Which keys a setter writes is not visible from here, and comparing
+# before and after misses a command that writes the value the model already
+# had (follow-up review of #207). So a command notes its entity as a whole
+# (note_command): the fetcher keeps all of that entity's attributes, for this
+# one snapshot. The next resync or event brings the rest.
 #
 # Event loop only, like everything that touches a model.
 _open_live_writes = []
@@ -237,10 +252,16 @@ _open_live_writes = []
 class _LiveWrites:
     def __init__(self):
         self._written = {}  # entity -> (hub keys of device fields, of attributes)
+        self._commanded = set()  # entities a command wrote to
 
     def _note(self, entity, attributes: bool, keys):
         if keys:
             self._written.setdefault(entity, (set(), set()))[attributes].update(keys)
+
+    def commanded(self, entity) -> bool:
+        """True when a command wrote to the entity's model since the fetch
+        began: all of its attributes are newer than the fetched ones."""
+        return entity in self._commanded
 
     def fields(self, entity) -> set:
         """Hub keys of the device's own fields written since the fetch began."""
@@ -262,11 +283,28 @@ def live_writes():
         _open_live_writes.remove(writes)
 
 
+def note_command(entity) -> None:
+    """A command for the entity: noted when its request goes out and again
+    after the hub accepted it. Its attributes are newer than a fetch on its
+    way, as an event's would be (#207: the safety net fetches every few
+    minutes, so a command during it is no longer rare). A command that then
+    fails has still cost that device the attributes of one snapshot; the
+    next resync or event brings them. Event loop only."""
+    for writes in _open_live_writes:
+        writes._commanded.add(entity)
+
+
 def replace_model(entity, fetched, newer):
     """Make `fetched` the entity's model. What hub messages wrote to the old
     model while it was fetched (`newer`, from live_writes) is newer than the
-    hub's answer and is carried over."""
+    hub's answer and is carried over. When a command wrote to the entity in
+    that time, its whole attributes object is kept (see note_command)."""
     old = entity._json_data
+    if newer.commanded(entity):
+        try:
+            fetched.attributes = old.attributes
+        except Exception as ex:
+            logger.warning(f"Could not keep the commanded attributes of {old.id}: {ex}")
     for source, target, keys in (
         (old, fetched, newer.fields(entity)),
         (getattr(old, "attributes", None), getattr(fetched, "attributes", None),
@@ -461,6 +499,11 @@ class hub_event_listener(threading.Thread):
 
     def _own_registry(self) -> dict:
         return hub_event_listener.device_registry.get(self._hub_key, {})
+
+    def _scene_sync(self):
+        """This entry's SceneSync (scene.py), None without the scene platform."""
+        data = getattr(self._hass, "data", None) or {}
+        return data.get(_DOMAIN, {}).get(self._config_entry_id, {}).get("scenes")
 
     def _device_sets(self):
         """This entry's device set manager (light.py), None without the light platform."""
@@ -1133,7 +1176,7 @@ class hub_event_listener(threading.Thread):
             id = self._registered_id(event_id, device_type)
             if id is None:
                 id = event_id
-                # During a reconnect resync we replay every device, so an
+                # During a resync (reconnect or safety net) we replay every device, so an
                 # unknown id here is just a device with no entity — skip it
                 # silently rather than firing discovery for it on every
                 # reconnect. See issue #39.
@@ -1163,6 +1206,14 @@ class hub_event_listener(threading.Thread):
             _apply_device_fields(entity, info, own_device=own_device)
             if has_attributes:
                 _apply_attributes(entity, info["attributes"], own_device=own_device)
+
+            if self._resyncing:
+                # The model is the hub's again; what changed while the
+                # WebSocket was down is not a change happening now (a blind
+                # that moved meanwhile is not moving, #207).
+                resynced = getattr(entity, "state_resynced", None)
+                if resynced is not None:
+                    resynced()
 
             # What has to follow is read from the device before and after, not
             # from which keys the event happened to carry.
@@ -1295,42 +1346,80 @@ class hub_event_listener(threading.Thread):
             )
         self._has_opened = True
 
-    async def _resync_all_states(self):
-        """Re-pull current state for all devices after a reconnect and apply
-        it like events, so changes missed during the disconnect gap are caught
-        up. One /devices fetch (no per-device hammering); discovery is
-        suppressed during the replay. See issue #39.
+    # --- the safety net (#207) ------------------------------------------------
+
+    async def run_safety_net(self) -> None:
+        """One run of the safety net (SAFETY_NET_INTERVAL). Setup schedules it
+        with Home Assistant's async_track_time_interval."""
+        if self._request_to_stop:
+            return
+        if self._resync_lock.locked():
+            # A resync is going (a reconnect, or the last run on a slow hub):
+            # it brings the same, and a second one would only queue behind it.
+            logger.debug("Safety net skipped: a resync is still going")
+            return
+        async with self._resync_lock:
+            # No prune: while connected a deleted set sends deviceSetDeleted,
+            # and a set the user empties for a while keeps its entity.
+            await self._resync_devices("safety net", prune_empty_sets=False)
+            # Then the scenes, in the same run and lock. A failure of either
+            # fetch is logged and leaves the other alone.
+            await self._sync_scenes()
+
+    async def _sync_scenes(self) -> None:
+        sync = self._scene_sync()
+        if sync is None:
+            return
+        try:
+            await sync.async_refresh()
+        except Exception as ex:  # pylint: disable=broad-except
+            logger.warning(f"Scene sync (safety net) failed: {ex}")
+
+    async def _resync_all_states(self, reason: str = "reconnect", prune_empty_sets: bool = True):
+        """Re-pull current state for all devices and apply it like events:
+        after a reconnect, so changes missed during the disconnect gap are
+        caught up (#39), and as the safety net every SAFETY_NET_INTERVAL, for
+        what an event did not bring (#207). One /devices fetch (no per-device
+        hammering); discovery is suppressed during the replay, and an entity
+        with state_resynced() is told its model is a snapshot.
 
         The snapshot is as old as the moment the hub built it. Events that
         arrive while it is fetched are applied at once, as always, and what
         they wrote is left out of the snapshot: it is newer (see live_writes).
         A device no event touched gets its whole row."""
         async with self._resync_lock:
-            self._membership_live = set()
+            await self._resync_devices(reason, prune_empty_sets)
+
+    async def _resync_devices(self, reason: str, prune_empty_sets: bool) -> None:
+        """The resync itself; the caller holds _resync_lock."""
+        self._membership_live = set()
+        try:
             with live_writes() as newer:
                 try:
                     devices = await self._hass.async_add_executor_job(self._hub.get, "/devices")
                 except Exception as ex:
-                    logger.warning(f"State resync failed to fetch /devices: {ex}")
-                    self._membership_live = None
+                    logger.warning(f"State resync ({reason}) failed to fetch /devices: {ex}")
                     return
             if not devices:
-                self._membership_live = None
                 return
             self._resyncing = True
             try:
                 for device in devices:
                     self._apply_message({"type": "deviceStateChanged",
                                          "data": self._without_newer(device, newer)})
-                logger.info(f"State resync applied for {len(devices)} devices after reconnect")
             finally:
                 self._resyncing = False
-                self._membership_live = None
-            # Queued behind the membership updates of the replay (#76): a set
-            # no light is in any more was deleted while we were disconnected.
-            manager = self._device_sets()
-            if manager is not None:
-                self._schedule(manager.async_prune_empty_sets)
+        finally:
+            # Also when the run is cancelled (unload), which is no Exception.
+            self._membership_live = None
+        # Every few minutes for the safety net: not worth an info line.
+        log = logger.info if reason == "reconnect" else logger.debug
+        log(f"State resync ({reason}) applied for {len(devices)} devices")
+        # Queued behind the membership updates of the replay (#76): a set
+        # no light is in any more was deleted while we were disconnected.
+        manager = self._device_sets()
+        if manager is not None and prune_empty_sets:
+            self._schedule(manager.async_prune_empty_sets)
 
     # What says which device a row is; never left out of it.
     _ROW_IDENTITY = frozenset({"id", "type", "deviceType"})
@@ -1348,10 +1437,15 @@ class hub_event_listener(threading.Thread):
             return device
         fields = newer.fields(entry.entity) - self._ROW_IDENTITY
         attributes = newer.attributes(entry.entity)
-        if not fields and not attributes:
+        # Per entity, so a commanded outlet also drops the attributes of its
+        # _2 electricalSensor row (routed to it) for this snapshot.
+        commanded = newer.commanded(entry.entity)
+        if not fields and not attributes and not commanded:
             return device
         row = {key: value for key, value in device.items() if key not in fields}
-        if isinstance(row.get("attributes"), dict):
+        if commanded:
+            row.pop("attributes", None)
+        elif isinstance(row.get("attributes"), dict):
             row["attributes"] = {key: value for key, value in row["attributes"].items()
                                  if key not in attributes}
         return row

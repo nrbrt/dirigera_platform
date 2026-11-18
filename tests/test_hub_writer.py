@@ -342,6 +342,11 @@ class _NoExecutor:
     async def async_add_executor_job(self, fn, *args):
         raise AssertionError(f"{getattr(fn, '__name__', fn)} went past the hub writer")
 
+    @property
+    def loop(self):
+        # A blind starts its wait for the next level report on it (#207).
+        return asyncio.get_running_loop()
+
 
 class _StubDevice:
     def __init__(self, hass, hub, json_data, get_by_id_fx):
@@ -388,6 +393,9 @@ def _load_devices():
         "ikea_base_device": _StubDevice, "math": math,
         "logger": logging.getLogger(__name__),
         "writer_for": hub_writer.writer_for,
+        # Noting that a command wrote, for a fetch on its way, is tested in
+        # test_command_writes_state.py; nothing is fetching here.
+        "note_command": lambda entity: None,
     }
     devices = _lift("base_classes.py",
                     ["ikea_outlet_device", "ikea_blinds_device", "ikea_starkvind_air_purifier_device"],
@@ -422,7 +430,8 @@ def _load_bulb_send():
     namespace = {"HomeAssistantError": Exception, "DOMAIN": "dirigera_platform",
                  "logger": logging.getLogger(__name__), "writer_for": hub_writer.writer_for,
                  # _send also writes the device set that follows the light (merge with #76)
-                 "hub_event_listener": SimpleNamespace(get_registry_entry=lambda hub_key, light_id: None)}
+                 "hub_event_listener": SimpleNamespace(get_registry_entry=lambda hub_key, light_id: None),
+                 "note_command": lambda entity: None}  # no resync fetch here
     exec(compile(ast.fix_missing_locations(ast.Module(body=methods, type_ignores=[])), path, "exec"), namespace)
     return namespace
 

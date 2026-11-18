@@ -542,9 +542,6 @@ class hub_event_listener(threading.Thread):
         # One resync at a time: a second reconnect waits for the first resync
         # and then fetches again.
         self._resync_lock = asyncio.Lock()
-        # The next run of the safety net (see SAFETY_NET_INTERVAL); None when
-        # none is planned.
-        self._safety_net_handle = None
         # Ids of lights whose set membership a live event changed while a
         # resync fetch was on its way; None when no fetch is. The snapshot's
         # deviceSet for them is older and is left out (review 16-11-2026).
@@ -1315,28 +1312,17 @@ class hub_event_listener(threading.Thread):
 
     # --- the safety net (#207) ------------------------------------------------
 
-    def start_safety_net(self) -> None:
-        """Event loop: plan the next run of the safety net."""
-        self._safety_net_handle = self._loop.call_later(
-            SAFETY_NET_INTERVAL, self._safety_net_due)
-
-    def stop_safety_net(self) -> None:
-        """Event loop: cancel the planned run. Unload calls it before stop()."""
-        if self._safety_net_handle is not None:
-            self._safety_net_handle.cancel()
-            self._safety_net_handle = None
-
-    def _safety_net_due(self) -> None:
-        self._safety_net_handle = None
+    async def run_safety_net(self) -> None:
+        """One run of the safety net (SAFETY_NET_INTERVAL). Setup schedules it
+        with Home Assistant's async_track_time_interval."""
         if self._request_to_stop:
             return
         if self._resync_lock.locked():
             # A resync is going (a reconnect, or the last run on a slow hub):
             # it brings the same, and a second one would only queue behind it.
             logger.debug("Safety net skipped: a resync is still going")
-        else:
-            self._hass.async_create_task(self._resync_all_states("safety net"))
-        self.start_safety_net()
+            return
+        await self._resync_all_states("safety net")
 
     async def _resync_all_states(self, reason: str = "reconnect"):
         """Re-pull current state for all devices after a reconnect and apply

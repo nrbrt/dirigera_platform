@@ -676,7 +676,7 @@ class ikea_blinds_device(ikea_base_device):
         self._stop_target_level = attributes.blinds_target_level
         self._stop_requested = True
         attributes.blinds_state = self.BLINDS_STATE_STOPPED
-        self._set_direction(None)
+        # The movement ends in _observe_movement, which _command runs next.
     
 class ikea_blinds_sensor(ikea_base_device_sensor, CoverEntity):
     def __init__(self, device:ikea_blinds_device):

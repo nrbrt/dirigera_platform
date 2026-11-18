@@ -217,6 +217,23 @@ def test_stop_ends_the_movement_and_a_coasting_report_does_not_restart_it():
     assert asyncio.run(go()) == ("", "", 48)
 
 
+@pytest.mark.parametrize("coasts", [False, True])
+def test_after_a_stop_no_return_to_open_closed_is_pending(pushes, coasts):
+    # Nothing is moving any more, so there is nothing to settle: no state
+    # write later on, neither from before the stop nor from a coasting report.
+    async def go():
+        blind, device, entity = _entity(current=40, target=100)
+        _report(device, blind, 50)
+        await entity.async_stop_cover()
+        if coasts:
+            _report(device, blind, 52)
+        before = len(pushes)
+        await asyncio.sleep(SETTLE * 2)
+        return len(pushes) - before
+
+    assert asyncio.run(go()) == 0
+
+
 def test_a_new_target_from_the_hub_after_a_stop_moves_again():
     # Moved again from the IKEA app: the event carries the new target.
     async def go():

@@ -364,6 +364,8 @@ async def async_setup_entry(
     # Per-entry storage instead of a module global: a second hub entry no
     # longer clobbers the first listener, and unload stops the right one.
     hass.data[DOMAIN][entry.entry_id]["hub_events"] = hub_events
+    # One GET /devices every few minutes instead of polling entities (#207).
+    hub_events.start_safety_net()
 
     # Catches devices that left the hub while Home Assistant was stopped;
     # deviceRemoved events cover the ones that go while it runs. In the
@@ -400,6 +402,7 @@ async def async_unload_entry(
     # directly used to freeze the event loop during unload/reload.
     hub_events = entry_data.get("hub_events")
     if hub_events is not None:
+        hub_events.stop_safety_net()
         await hass.async_add_executor_job(hub_events.stop)
 
     hass_data = dict(entry.data)

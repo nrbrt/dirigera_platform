@@ -62,6 +62,13 @@ controller_trigger_last_time_map = {}
 # HA device ids of remotes seen sending remotePressEvent (see _fire_controller_event).
 remotes_with_press_events = set()
 DEBOUNCE_DELTA = datetime.timedelta(seconds=1)
+# Seconds between two runs of the safety net (#207): one GET /devices for the
+# whole hub, applied like the reconnect resync. Entities are not polled one by
+# one any more (that load made a hub with many devices unresponsive); this
+# catches what an event did not bring. Five minutes is what the reporter of
+# #207 ran with 150 entities, and one request per five minutes is nothing for
+# the hub.
+SAFETY_NET_INTERVAL = 5 * 60
 # A scene trigger whose time is older than this, relative to the sceneUpdated
 # message, belongs to an earlier press.
 STALE_TRIGGER_DELTA = datetime.timedelta(seconds=5)
@@ -535,6 +542,9 @@ class hub_event_listener(threading.Thread):
         # One resync at a time: a second reconnect waits for the first resync
         # and then fetches again.
         self._resync_lock = asyncio.Lock()
+        # The next run of the safety net (see SAFETY_NET_INTERVAL); None when
+        # none is planned.
+        self._safety_net_handle = None
         # Ids of lights whose set membership a live event changed while a
         # resync fetch was on its way; None when no fetch is. The snapshot's
         # deviceSet for them is older and is left out (review 16-11-2026).
@@ -1303,7 +1313,32 @@ class hub_event_listener(threading.Thread):
             )
         self._has_opened = True
 
-    async def _resync_all_states(self):
+    # --- the safety net (#207) ------------------------------------------------
+
+    def start_safety_net(self) -> None:
+        """Event loop: plan the next run of the safety net."""
+        self._safety_net_handle = self._loop.call_later(
+            SAFETY_NET_INTERVAL, self._safety_net_due)
+
+    def stop_safety_net(self) -> None:
+        """Event loop: cancel the planned run. Unload calls it before stop()."""
+        if self._safety_net_handle is not None:
+            self._safety_net_handle.cancel()
+            self._safety_net_handle = None
+
+    def _safety_net_due(self) -> None:
+        self._safety_net_handle = None
+        if self._request_to_stop:
+            return
+        if self._resync_lock.locked():
+            # A resync is going (a reconnect, or the last run on a slow hub):
+            # it brings the same, and a second one would only queue behind it.
+            logger.debug("Safety net skipped: a resync is still going")
+        else:
+            self._hass.async_create_task(self._resync_all_states("safety net"))
+        self.start_safety_net()
+
+    async def _resync_all_states(self, reason: str = "reconnect"):
         """Re-pull current state for all devices after a reconnect and apply
         it like events, so changes missed during the disconnect gap are caught
         up. One /devices fetch (no per-device hammering); discovery is
@@ -1319,7 +1354,7 @@ class hub_event_listener(threading.Thread):
                 try:
                     devices = await self._hass.async_add_executor_job(self._hub.get, "/devices")
                 except Exception as ex:
-                    logger.warning(f"State resync failed to fetch /devices: {ex}")
+                    logger.warning(f"State resync ({reason}) failed to fetch /devices: {ex}")
                     self._membership_live = None
                     return
             if not devices:
@@ -1330,7 +1365,9 @@ class hub_event_listener(threading.Thread):
                 for device in devices:
                     self._apply_message({"type": "deviceStateChanged",
                                          "data": self._without_newer(device, newer)})
-                logger.info(f"State resync applied for {len(devices)} devices after reconnect")
+                # Every few minutes for the safety net: not worth an info line.
+                log = logger.info if reason == "reconnect" else logger.debug
+                log(f"State resync ({reason}) applied for {len(devices)} devices")
             finally:
                 self._resyncing = False
                 self._membership_live = None

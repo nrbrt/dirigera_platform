@@ -393,7 +393,7 @@ def _load_devices():
         "ikea_base_device": _StubDevice, "math": math,
         "logger": logging.getLogger(__name__),
         "writer_for": hub_writer.writer_for,
-        # Noting what a command wrote for a fetch on its way is tested in
+        # Noting that a command wrote, for a fetch on its way, is tested in
         # test_command_writes_state.py; nothing is fetching here.
         "note_command": lambda entity: None,
     }

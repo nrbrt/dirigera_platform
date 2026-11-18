@@ -295,7 +295,8 @@ def note_command(entity) -> None:
 def replace_model(entity, fetched, newer):
     """Make `fetched` the entity's model. What hub messages wrote to the old
     model while it was fetched (`newer`, from live_writes) is newer than the
-    hub's answer and is carried over."""
+    hub's answer and is carried over. When a command wrote to the entity in
+    that time, its whole attributes object is kept (see note_command)."""
     old = entity._json_data
     if newer.commanded(entity):
         try:
@@ -1412,6 +1413,8 @@ class hub_event_listener(threading.Thread):
             return device
         fields = newer.fields(entry.entity) - self._ROW_IDENTITY
         attributes = newer.attributes(entry.entity)
+        # Per entity, so a commanded outlet also drops the attributes of its
+        # _2 electricalSensor row (routed to it) for this snapshot.
         commanded = newer.commanded(entry.entity)
         if not fields and not attributes and not commanded:
             return device

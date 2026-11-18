@@ -167,20 +167,20 @@ def test_air_purifier_commands_write_state(env):
 # that fetch is on its way is newer than the snapshot; the snapshot must not
 # put the old value back. live_writes knew only what hub events wrote.
 
-@pytest.mark.parametrize("make, command, row_attributes, kept", [
+@pytest.mark.parametrize("make, command, row_attributes", [
     (lambda env: env.bc.ikea_blinds_device(env.hass, env.finder, _model(
         env.hub, "blind_1", blinds_target_level=0, blinds_current_level=0, blinds_state="up")),
      lambda device: device.async_close_cover,
-     {"blindsTargetLevel": 0, "batteryPercentage": 80}, None),
+     {"blindsTargetLevel": 0, "batteryPercentage": 80}),
     (lambda env: env.bc.ikea_blinds_device(env.hass, env.finder, _model(
         env.hub, "blind_1", blinds_target_level=100, blinds_current_level=40, blinds_state="down")),
      lambda device: device.async_stop_cover,
-     {"blindsState": "down", "blindsCurrentLevel": 41}, None),
+     {"blindsState": "down", "blindsCurrentLevel": 41}),
     (lambda env: env.bc.ikea_outlet_device(env.hass, env.finder, _model(env.hub, "outlet_1", is_on=False)),
      lambda device: device.async_turn_on,
-     {"isOn": False}, None),
+     {"isOn": False}),
 ])
-def test_a_command_during_a_resync_fetch_is_not_undone_by_the_snapshot(env, make, command, row_attributes, kept):
+def test_a_command_during_a_resync_fetch_is_not_undone_by_the_snapshot(env, make, command, row_attributes):
     hel = sys.modules["dp_under_test.hub_event_listener"]
     device = make(env)
     with hel.live_writes() as newer:  # what the resync opens while it fetches
@@ -191,8 +191,9 @@ def test_a_command_during_a_resync_fetch_is_not_undone_by_the_snapshot(env, make
            "attributes": dict(row_attributes)}
     # The commanded device keeps all its attributes for this one snapshot
     # (the next resync or event brings the rest); its own fields still apply.
-    assert listener._without_newer(row, newer).get("attributes", kept) == kept
-    assert listener._without_newer(row, newer)["isReachable"] is True
+    applied = listener._without_newer(row, newer)
+    assert "attributes" not in applied
+    assert applied["isReachable"] is True
 
 
 def test_a_command_outside_a_fetch_notes_nothing(env):

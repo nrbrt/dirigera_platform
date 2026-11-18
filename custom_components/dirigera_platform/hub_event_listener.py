@@ -1164,6 +1164,14 @@ class hub_event_listener(threading.Thread):
             if has_attributes:
                 _apply_attributes(entity, info["attributes"], own_device=own_device)
 
+            if self._resyncing:
+                # The model is the hub's again; what changed while the
+                # WebSocket was down is not a change happening now (a blind
+                # that moved meanwhile is not moving, #207).
+                resynced = getattr(entity, "state_resynced", None)
+                if resynced is not None:
+                    resynced()
+
             # What has to follow is read from the device before and after, not
             # from which keys the event happened to carry.
             fields_after, room_after, name_after = _device_view(entity)

@@ -133,6 +133,11 @@ class FakeHass:
     async def async_add_executor_job(self, func, *args):
         return func(*args)
 
+    @property
+    def loop(self):
+        # Home Assistant's loop: here the one asyncio.run started.
+        return asyncio.get_running_loop()
+
 
 class FakeClient:
     def __init__(self, fail=False):

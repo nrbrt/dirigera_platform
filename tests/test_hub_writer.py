@@ -342,6 +342,11 @@ class _NoExecutor:
     async def async_add_executor_job(self, fn, *args):
         raise AssertionError(f"{getattr(fn, '__name__', fn)} went past the hub writer")
 
+    @property
+    def loop(self):
+        # A blind starts its wait for the next level report on it (#207).
+        return asyncio.get_running_loop()
+
 
 class _StubDevice:
     def __init__(self, hass, hub, json_data, get_by_id_fx):

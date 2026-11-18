@@ -29,7 +29,11 @@ HUB_KEY = "wss://command-writes-state.test"
 
 
 class _Hass:
-    loop = None
+    @property
+    def loop(self):
+        # Home Assistant's loop: here the one the test runs on. A blind
+        # starts its wait for the next level report on it (#207).
+        return asyncio.get_running_loop()
 
     async def async_add_executor_job(self, fn, *args):
         return await asyncio.get_running_loop().run_in_executor(None, fn, *args)

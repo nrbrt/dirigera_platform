@@ -540,18 +540,20 @@ class ikea_blinds_device(ikea_base_device):
     OPENING = "opening"
     CLOSING = "closing"
     # Without a level report for this long, a moving blind is open or closed
-    # again (#207). Short: a moving blind reports its level often.
+    # again, and a stopped one has stopped coasting (#207). Short: a moving
+    # blind reports its level often.
     SETTLE_SECONDS = 5
 
     def __init__(self, hass:core.HomeAssistant, hub:Hub, blind:Blind):
         logger.debug("IkeaBlinds ctor...")
         super().__init__(hass, hub, blind, hub.get_blinds_by_id)
-        # Set by async_stop_cover, see stop_requested for why it exists.
+        # Set by a stop the hub accepted, see stop_requested.
         self._stop_requested = False
         self._stop_target_level = None
         # Which way the blind is moving (#207), from what it does: the change
         # in its current level, or a command. None when it is not moving.
         self._direction = None
+        # Ends a movement, or the window after a stop, without level reports.
         self._settle_handle = None
         self._seen_level, self._seen_target = self._levels()
     
@@ -566,7 +568,10 @@ class ikea_blinds_device(ikea_base_device):
 
     @property
     def stop_requested(self) -> bool:
-        """True while the blind should be treated as standing still after a stop."""
+        """True in the window after a stop, while the blind may still coast.
+
+        Level reports in it are no movement. It ends SETTLE_SECONDS after the
+        last of them, or at once with a new target or a move command."""
         if (self._stop_requested
                 and self._json_data.attributes.blinds_target_level != self._stop_target_level):
             self._stop_requested = False
@@ -575,8 +580,6 @@ class ikea_blinds_device(ikea_base_device):
     @property
     def direction(self) -> str | None:
         """OPENING, CLOSING, or None when the blind is not moving."""
-        if self.stop_requested:
-            return None
         return self._direction
 
     # --- the direction (#207) ---------------------------------------------
@@ -592,9 +595,21 @@ class ikea_blinds_device(ikea_base_device):
         super().async_schedule_update_ha_state(force_refresh)
 
     async def async_update(self):
-        # A poll replaces the model; a level change it brings is a movement too.
+        # A poll replaces the model; a level change it brings is a movement
+        # too. Home Assistant writes only the entity it polled, which may be
+        # the battery sensor, so a new direction is written here.
         await super().async_update()
+        before = self._direction
         self._observe_movement()
+        if self._direction != before:
+            super().async_schedule_update_ha_state(False)
+
+    def state_resynced(self) -> None:
+        """The reconnect resync replaced the model with the hub's.
+
+        What changed while the WebSocket was down already happened: it is not
+        a movement now, and the next move starts from here."""
+        self._seen_level, self._seen_target = self._levels()
 
     def _levels(self):
         """(current, target) as the hub reported them; None until it did."""
@@ -606,12 +621,17 @@ class ikea_blinds_device(ikea_base_device):
         level, target = self._levels()
         seen_level, seen_target = self._seen_level, self._seen_target
         self._seen_level, self._seen_target = level, target
+        level_changed = level is not None and seen_level is not None and level != seen_level
         if self.stop_requested:
-            self._set_direction(None)
+            if level_changed:
+                self._arm_settle()  # still coasting
             return
-        if level is not None and seen_level is not None and level != seen_level:
-            self._set_direction(self.CLOSING if level > seen_level else self.OPENING)
-        elif target is not None and level is not None and target != seen_target:
+        if level_changed:
+            if level == target:
+                self._set_direction(None)  # arrived
+            else:
+                self._set_direction(self.CLOSING if level > seen_level else self.OPENING)
+        elif target is not None and target != seen_target:
             # A new target from the hub (the IKEA app, another controller).
             self._set_direction(self._direction_to(target))
 
@@ -623,15 +643,21 @@ class ikea_blinds_device(ikea_base_device):
 
     def _set_direction(self, direction) -> None:
         self._direction = direction
+        if direction is None:
+            self.cancel_settle()
+        else:
+            self._arm_settle()
+
+    def _arm_settle(self) -> None:
         self.cancel_settle()
-        if direction is not None:
-            self._settle_handle = asyncio.get_running_loop().call_later(
-                self.SETTLE_SECONDS, self._settled)
+        self._settle_handle = self._hass.loop.call_later(self.SETTLE_SECONDS, self._settled)
 
     def _settled(self) -> None:
         self._settle_handle = None
         self._direction = None
-        self.async_schedule_update_ha_state(False)
+        self._stop_requested = False
+        # Not through our own override: nothing new was reported to observe.
+        super().async_schedule_update_ha_state(False)
 
     def cancel_settle(self) -> None:
         if self._settle_handle is not None:
@@ -653,7 +679,7 @@ class ikea_blinds_device(ikea_base_device):
         self._json_data.set_state(BlindsStateEnum.STOPPED)
 
     async def _move(self, level: int) -> None:
-        self._stop_requested = False
+        # The stop ends only when the hub accepted the move (_moving_to).
         await self._command(self._json_data.set_target_level, level,
                             accepted=self._moving_to(level))
     
@@ -678,7 +704,8 @@ class ikea_blinds_device(ikea_base_device):
         self._stop_target_level = attributes.blinds_target_level
         self._stop_requested = True
         attributes.blinds_state = self.BLINDS_STATE_STOPPED
-        # The movement ends in _observe_movement, which _command runs next.
+        self._direction = None
+        self._arm_settle()  # the window in which the blind may coast
     
 class ikea_blinds_sensor(ikea_base_device_sensor, CoverEntity):
     def __init__(self, device:ikea_blinds_device):

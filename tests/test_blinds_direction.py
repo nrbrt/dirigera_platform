@@ -14,39 +14,105 @@ target was 100, opening only when it was 0. That went wrong in three ways:
 Now the direction comes from what the blind does: a rising current level is
 closing (the hub's levels run from 0 = open to 100 = closed), a falling one is
 opening. A command sets the direction at once, so the UI reacts before the
-first level report. When no level report has arrived for a short while
-(SETTLE_SECONDS), the blind is open or closed again.
+first level report. When no level report has arrived for SETTLE_SECONDS, or
+the level reached the target, the blind is open or closed again.
 
-The classes are loaded as in test_blinds_stop.py: the real bodies, without
-Home Assistant.
+A stop opens a window of the same length in which the blind may coast: level
+reports in it are no movement. Once no report came for SETTLE_SECONDS, the
+next change is a movement again, also one started with the remote.
+
+The device classes are loaded as in test_blinds_stop.py, with the real bodies
+and without Home Assistant. Time is a fake clock: nothing here sleeps. The
+last section runs a hub event through the real ikea_base_device and the real
+hub_event_listener, which test_blinds_stop.py stubs.
 """
 import asyncio
+import json
+import sys
+from types import SimpleNamespace
+from typing import Optional
 
 import pytest
+from pydantic import BaseModel
 
 import test_blinds_stop as blinds
-from test_blinds_stop import FakeClient, make_blind, make_entity
+from test_blinds_stop import make_blind
 
-# Short enough for a fast suite, long enough that two reports in a row fall
-# inside one window on a loaded test runner.
-SETTLE = 0.2
+SETTLE = 5
+
+
+class _Timer:
+    def __init__(self, when, fn, args):
+        self._when, self.fn, self.args = when, fn, args
+        self.cancelled = False
+
+    def when(self):
+        return self._when
+
+    def cancel(self):
+        self.cancelled = True
+
+
+class Clock:
+    """A loop that only keeps time: call_later timers fire on advance()."""
+
+    def __init__(self):
+        self.now = 0.0
+        self.timers = []
+
+    def time(self):
+        return self.now
+
+    def call_later(self, delay, fn, *args):
+        timer = _Timer(self.now + delay, fn, args)
+        self.timers.append(timer)
+        return timer
+
+    def pending(self):
+        return [t for t in self.timers if not t.cancelled]
+
+    def advance(self, seconds):
+        end = self.now + seconds
+        while True:
+            due = [t for t in self.pending() if t.when() <= end]
+            if not due:
+                break
+            timer = min(due, key=_Timer.when)
+            self.now = timer.when()
+            self.timers.remove(timer)
+            timer.fn(*timer.args)
+        self.now = end
+
+
+class ClockHass:
+    def __init__(self):
+        self.loop = Clock()
+
+    async def async_add_executor_job(self, func, *args):
+        return func(*args)
 
 
 def _entity(**kwargs):
     blind = make_blind(**kwargs)
-    device, entity = make_entity(blind)
-    device.SETTLE_SECONDS = SETTLE
-    return blind, device, entity
+    hass = ClockHass()
+    device = blinds.Device(hass, SimpleNamespace(get_blinds_by_id=lambda _id: blind), blind)
+    return blind, device, blinds.Sensor(device), hass.loop
 
 
-def _report(device, blind, level):
+def _report(device, blind, level, target=None):
     """A hub event with a new current level, as hub_event_listener applies it."""
     blind.attributes.blinds_current_level = level
+    if target is not None:
+        blind.attributes.blinds_target_level = target
     device.async_schedule_update_ha_state(False)
 
 
 def _direction(entity):
     return ("opening" if entity.is_opening else "") + ("closing" if entity.is_closing else "")
+
+
+def run(coro):
+    return asyncio.run(coro)
 
 
 @pytest.fixture
@@ -60,212 +126,324 @@ def pushes(monkeypatch):
 
 # --- from the level --------------------------------------------------------------
 
-@pytest.mark.parametrize("levels, expected", [
-    ((20, 40), "closing"),   # 0 = open, 100 = closed: rising is closing
-    ((80, 60), "opening"),
+@pytest.mark.parametrize("start, levels, expected", [
+    (0, (20, 40), "closing"),   # 0 = open, 100 = closed: rising is closing
+    (100, (80, 60), "opening"),
 ])
-def test_direction_follows_the_current_level(levels, expected):
-    async def go():
-        blind, device, entity = _entity(current=levels[0] - (levels[1] - levels[0]), target=50)
-        for level in levels:
-            _report(device, blind, level)
-        return _direction(entity)
-
-    assert asyncio.run(go()) == expected
+def test_direction_follows_the_current_level(start, levels, expected):
+    blind, device, entity, _ = _entity(current=start, target=50)
+    for level in levels:
+        _report(device, blind, level)
+    assert _direction(entity) == expected
 
 
 def test_remote_move_against_a_stale_target_shows_the_real_direction():
     # The last command opened the blind (target 0). Now the remote sends it
     # down: the hub reports only the current level, the target stays 0.
-    async def go():
-        blind, device, entity = _entity(current=0, target=0)
-        for level in (10, 25, 40):
-            _report(device, blind, level)
-        return _direction(entity)
-
-    assert asyncio.run(go()) == "closing"
+    blind, device, entity, _ = _entity(current=0, target=0)
+    for level in (10, 25, 40):
+        _report(device, blind, level)
+    assert _direction(entity) == "closing"
 
 
-def test_move_to_a_middle_position_has_a_direction():
-    # The old rule only knew targets 0 and 100.
-    async def go():
-        blind, device, entity = _entity(current=100, target=100)
-        await entity.async_set_cover_position(position=50)  # hub level 50
-        return _direction(entity), blind.moves
-
-    assert asyncio.run(go()) == ("opening", [50])
+def test_a_reversal_halfway_shows_the_new_direction():
+    blind, device, entity, _ = _entity(current=0, target=0)
+    _report(device, blind, 30)
+    _report(device, blind, 50)
+    assert _direction(entity) == "closing"
+    _report(device, blind, 40)
+    assert _direction(entity) == "opening"
 
 
 def test_a_blind_at_rest_is_not_moving_whatever_its_target():
     # Stopped short of its target (remote, obstacle) or after a restart: a
     # target that differs from the current level is not a movement.
-    _, _, entity = _entity(current=60, target=100)
+    _, _, entity, _ = _entity(current=60, target=100)
     assert _direction(entity) == ""
     assert entity.current_cover_position == 40
 
 
 def test_a_report_with_the_same_level_is_not_a_movement():
-    async def go():
-        blind, device, entity = _entity(current=60, target=100)
-        _report(device, blind, 60)
-        return _direction(entity)
-
-    assert asyncio.run(go()) == ""
+    blind, device, entity, _ = _entity(current=60, target=100)
+    _report(device, blind, 60)
+    assert _direction(entity) == ""
 
 
 # --- back to open/closed ---------------------------------------------------------
 
 def test_without_reports_the_blind_settles_and_its_state_is_written(pushes):
-    async def go():
-        blind, device, entity = _entity(current=0, target=100)
-        _report(device, blind, 30)
-        moving = _direction(entity)
-        before = len(pushes)
-        await asyncio.sleep(SETTLE * 2)
-        return moving, _direction(entity), len(pushes) - before
+    blind, device, entity, clock = _entity(current=0, target=100)
+    _report(device, blind, 30)
+    assert _direction(entity) == "closing"
+    assert [t.when() for t in clock.pending()] == [SETTLE]
 
-    moving, after, written = asyncio.run(go())
-    assert moving == "closing"
-    assert after == ""
-    assert written == 1  # the settled state reaches Home Assistant
+    before = len(pushes)
+    clock.advance(SETTLE - 0.01)
+    assert _direction(entity) == "closing"
+    clock.advance(0.01)
+    assert _direction(entity) == ""
+    assert len(pushes) - before == 1  # the settled state reaches Home Assistant
 
 
 def test_every_report_restarts_the_wait():
-    async def go():
-        blind, device, entity = _entity(current=0, target=100)
-        _report(device, blind, 10)
-        await asyncio.sleep(SETTLE * 0.6)
-        _report(device, blind, 20)
-        await asyncio.sleep(SETTLE * 0.6)  # 1.2 x SETTLE after the first report
-        return _direction(entity)
-
-    assert asyncio.run(go()) == "closing"
+    blind, device, entity, clock = _entity(current=0, target=100)
+    _report(device, blind, 10)
+    clock.advance(3)
+    _report(device, blind, 20)
+    assert [t.when() for t in clock.pending()] == [3 + SETTLE]
+    clock.advance(3)  # 6 s after the first report, 3 s after the last
+    assert _direction(entity) == "closing"
 
 
-def test_closed_after_settling_at_the_bottom():
-    async def go():
-        blind, device, entity = _entity(current=80, target=100)
-        _report(device, blind, 100)
-        await asyncio.sleep(SETTLE * 2)
-        return _direction(entity), entity.is_closed
-
-    assert asyncio.run(go()) == ("", True)
+def test_a_report_on_the_target_ends_the_movement_at_once():
+    blind, device, entity, clock = _entity(current=80, target=100)
+    _report(device, blind, 90)
+    _report(device, blind, 100)
+    assert _direction(entity) == ""
+    assert entity.is_closed is True
+    assert clock.pending() == []
 
 
 # --- commands --------------------------------------------------------------------
 
-@pytest.mark.parametrize("command, kwargs, expected", [
-    ("async_close_cover", {}, "closing"),
-    ("async_open_cover", {}, "opening"),
-    ("async_set_cover_position", {"position": 10}, "closing"),  # hub level 90
+@pytest.mark.parametrize("command, kwargs, expected, level", [
+    ("async_close_cover", {}, "closing", 100),
+    ("async_open_cover", {}, "opening", 0),
+    ("async_set_cover_position", {"position": 10}, "closing", 90),
+    ("async_set_cover_position", {"position": 80}, "opening", 20),
 ])
-def test_a_command_shows_its_direction_before_the_first_report(command, kwargs, expected):
-    async def go():
-        blind, device, entity = _entity(current=40, target=40)
-        await getattr(entity, command)(**kwargs)
-        return _direction(entity)
-
-    assert asyncio.run(go()) == expected
+def test_a_command_shows_its_direction_before_the_first_report(command, kwargs, expected, level):
+    blind, device, entity, _ = _entity(current=40, target=40)
+    run(getattr(entity, command)(**kwargs))
+    assert (_direction(entity), blind.moves) == (expected, [level])
 
 
 def test_a_command_to_where_the_blind_already_is_does_not_move_it():
-    async def go():
-        blind, device, entity = _entity(current=100, target=100)
-        await entity.async_close_cover()
-        return _direction(entity)
-
-    assert asyncio.run(go()) == ""
+    blind, device, entity, _ = _entity(current=100, target=100)
+    run(entity.async_close_cover())
+    assert _direction(entity) == ""
 
 
 def test_a_failed_command_shows_no_movement():
-    async def go():
-        blind, device, entity = _entity(current=40, target=40)
+    blind, device, entity, _ = _entity(current=40, target=40)
 
-        def refuse(level):
-            raise RuntimeError("hub unreachable")
-        blind.set_target_level = refuse
-        with pytest.raises(RuntimeError):
-            await entity.async_close_cover()
-        return _direction(entity)
-
-    assert asyncio.run(go()) == ""
+    def refuse(level):
+        raise RuntimeError("hub unreachable")
+    blind.set_target_level = refuse
+    with pytest.raises(RuntimeError):
+        run(entity.async_close_cover())
+    assert _direction(entity) == ""
 
 
 def test_the_level_reports_of_a_command_keep_it_moving():
-    async def go():
-        blind, device, entity = _entity(current=40, target=40)
-        await entity.async_close_cover()
-        await asyncio.sleep(SETTLE * 0.6)
-        _report(device, blind, 50)
-        await asyncio.sleep(SETTLE * 0.6)
-        return _direction(entity)
-
-    assert asyncio.run(go()) == "closing"
+    blind, device, entity, clock = _entity(current=40, target=40)
+    run(entity.async_close_cover())
+    clock.advance(3)
+    _report(device, blind, 50)
+    clock.advance(3)
+    assert _direction(entity) == "closing"
 
 
 # --- stop ------------------------------------------------------------------------
 
 def test_stop_ends_the_movement_and_a_coasting_report_does_not_restart_it():
-    async def go():
-        blind, device, entity = _entity(current=40, target=100)
-        _report(device, blind, 50)
-        await entity.async_stop_cover()
-        stopped = _direction(entity)
-        _report(device, blind, 52)  # the blind coasts a little
-        return stopped, _direction(entity), entity.current_cover_position
-
-    assert asyncio.run(go()) == ("", "", 48)
+    blind, device, entity, clock = _entity(current=40, target=100)
+    _report(device, blind, 50)
+    run(entity.async_stop_cover())
+    assert _direction(entity) == ""
+    _report(device, blind, 52)  # the blind coasts a little
+    assert (_direction(entity), entity.current_cover_position) == ("", 48)
 
 
-@pytest.mark.parametrize("coasts", [False, True])
-def test_after_a_stop_no_return_to_open_closed_is_pending(pushes, coasts):
-    # Nothing is moving any more, so there is nothing to settle: no state
-    # write later on, neither from before the stop nor from a coasting report.
-    async def go():
-        blind, device, entity = _entity(current=40, target=100)
-        _report(device, blind, 50)
-        await entity.async_stop_cover()
-        if coasts:
-            _report(device, blind, 52)
-        before = len(pushes)
-        await asyncio.sleep(SETTLE * 2)
-        return len(pushes) - before
+def test_coasting_reports_keep_the_stop_window_open():
+    blind, device, entity, clock = _entity(current=40, target=100)
+    _report(device, blind, 50)
+    run(entity.async_stop_cover())
+    clock.advance(4)
+    _report(device, blind, 52)
+    clock.advance(4)  # 8 s after the stop, 4 s after the last coasting report
+    _report(device, blind, 53)
+    assert (_direction(entity), device.stop_requested) == ("", True)
 
-    assert asyncio.run(go()) == 0
+
+def test_after_the_stop_window_a_remote_move_has_a_direction_again():
+    # Review finding 2: the stop used to hold until a new target or a Home
+    # Assistant command, and a remote move brings neither.
+    blind, device, entity, clock = _entity(current=40, target=100)
+    _report(device, blind, 50)
+    run(entity.async_stop_cover())
+    clock.advance(SETTLE + 1)
+    assert device.stop_requested is False
+    for level in (60, 70, 80):
+        _report(device, blind, level)
+    assert _direction(entity) == "closing"
+
+
+def test_the_level_during_the_stop_window_is_the_start_of_the_next_move():
+    # A report in the window is remembered: the next move is measured from it.
+    blind, device, entity, clock = _entity(current=40, target=100)
+    _report(device, blind, 50)
+    run(entity.async_stop_cover())
+    _report(device, blind, 58)
+    clock.advance(SETTLE + 1)
+    _report(device, blind, 55)
+    assert _direction(entity) == "opening"
+
+
+def test_after_a_stop_no_return_to_open_closed_is_left_but_the_window(pushes):
+    blind, device, entity, clock = _entity(current=40, target=100)
+    _report(device, blind, 50)
+    run(entity.async_stop_cover())
+    assert [t.fn.__name__ for t in clock.pending()] == ["_settled"]
+    before = len(pushes)
+    clock.advance(SETTLE * 3)
+    assert len(pushes) - before == 1  # the end of the window, once
+
+
+def test_the_stop_window_runs_from_the_stop():
+    # Not from the last level report before it.
+    blind, device, entity, clock = _entity(current=40, target=100)
+    _report(device, blind, 50)
+    clock.advance(3)
+    run(entity.async_stop_cover())
+    clock.advance(SETTLE - 1)  # past the wait of the report, inside the window
+    assert device.stop_requested is True
+    clock.advance(1)
+    assert device.stop_requested is False
 
 
 def test_a_new_target_from_the_hub_after_a_stop_moves_again():
     # Moved again from the IKEA app: the event carries the new target.
-    async def go():
-        blind, device, entity = _entity(current=40, target=100)
-        _report(device, blind, 50)
-        await entity.async_stop_cover()
-        blind.attributes.blinds_target_level = 0
-        device.async_schedule_update_ha_state(False)
-        return device.stop_requested, _direction(entity)
+    blind, device, entity, _ = _entity(current=40, target=100)
+    _report(device, blind, 50)
+    run(entity.async_stop_cover())
+    _report(device, blind, 50, target=0)
+    assert (device.stop_requested, _direction(entity)) == (False, "opening")
 
-    assert asyncio.run(go()) == (False, "opening")
+
+def test_a_refused_command_after_a_stop_keeps_the_stop():
+    # Review finding 4: the stop was cleared before the hub answered.
+    blind, device, entity, _ = _entity(current=40, target=100)
+    _report(device, blind, 50)
+    run(entity.async_stop_cover())
+
+    def refuse(level):
+        raise RuntimeError("hub unreachable")
+    blind.set_target_level = refuse
+    with pytest.raises(RuntimeError):
+        run(entity.async_open_cover())
+
+    assert device.stop_requested is True
+    _report(device, blind, 52)  # still coasting
+    assert _direction(entity) == ""
 
 
 # --- the poll and removal ----------------------------------------------------------
 
-def test_a_level_change_seen_by_the_poll_is_a_movement():
-    async def go():
-        blind, device, entity = _entity(current=20, target=20)
-        device._json_data = make_blind(current=35, target=100)  # what the poll fetched
-        await device.async_update()
-        return _direction(entity)
+def test_a_level_change_seen_by_the_poll_is_a_movement_and_is_written(pushes):
+    blind, device, entity, _ = _entity(current=20, target=20)
+    device._json_data = make_blind(current=35, target=100)  # what the poll fetched
+    before = len(pushes)
+    run(device.async_update())
+    assert _direction(entity) == "closing"
+    # Review finding 5: the battery sensor's poll refreshes the device too,
+    # and Home Assistant then writes only that sensor.
+    assert len(pushes) - before == 1
 
-    assert asyncio.run(go()) == "closing"
+
+def test_a_poll_without_change_writes_nothing_extra(pushes):
+    blind, device, entity, _ = _entity(current=20, target=20)
+    before = len(pushes)
+    run(device.async_update())
+    assert len(pushes) - before == 0
 
 
-def test_removing_the_entity_cancels_the_wait(pushes):
-    async def go():
-        blind, device, entity = _entity(current=0, target=100)
-        _report(device, blind, 30)
-        await entity.async_will_remove_from_hass()
-        before = len(pushes)
-        await asyncio.sleep(SETTLE * 2)
-        return len(pushes) - before
+def test_removing_the_entity_cancels_the_wait():
+    blind, device, entity, clock = _entity(current=0, target=100)
+    _report(device, blind, 30)
+    run(entity.async_will_remove_from_hass())
+    assert clock.pending() == []
 
-    assert asyncio.run(go()) == 0
+
+# --- through the real base device and hub event listener ----------------------------
+
+HUB_KEY = "wss://blinds-direction.test"
+
+
+class _BlindAttrs(BaseModel):
+    custom_name: str = "blind"
+    blinds_current_level: Optional[int] = None
+    blinds_target_level: Optional[int] = None
+    blinds_state: Optional[str] = None
+    battery_percentage: Optional[int] = None
+
+    def dict(self):  # what induce_properties asks for
+        return self.model_dump()
+
+
+class _Cover:
+    """The cover entity as the device fans out to it."""
+
+    def __init__(self):
+        self.hass = object()
+        self.writes = 0
+
+    def async_schedule_update_ha_state(self, force_refresh=False):
+        self.writes += 1
+
+
+@pytest.fixture
+def real():
+    from test_throttle_trailing_flush import _load_base_classes
+    bc = _load_base_classes()
+    listener_cls = sys.modules["dp_under_test.hub_event_listener"].hub_event_listener
+    loop = asyncio.new_event_loop()  # the listener's __init__ asks for one
+    asyncio.set_event_loop(loop)
+    hass = SimpleNamespace(loop=Clock(), async_create_task=lambda coro: coro.close())
+    hub = SimpleNamespace(websocket_base_url=HUB_KEY, get_blinds_by_id=None)
+    listener = listener_cls(hub, hass, None)
+    model = SimpleNamespace(id="blind_1", relation_id=None, room=None, is_reachable=True,
+                            capabilities=None,
+                            attributes=_BlindAttrs(blinds_current_level=0, blinds_target_level=0))
+    device = bc.ikea_blinds_device(hass, hub, model)
+    cover = _Cover()
+    device.add_listener(cover)
+
+    def event(**attributes):
+        listener._apply_message({"type": "deviceStateChanged", "data": {
+            "id": "blind_1", "deviceType": "blinds", "attributes": attributes}})
+
+    yield SimpleNamespace(device=device, cover=cover, event=event, listener=listener,
+                          clock=hass.loop)
+    listener_cls.unregister_hub(HUB_KEY)
+    asyncio.set_event_loop(None)
+    loop.close()
+
+
+def test_a_hub_event_reaches_the_direction_and_the_cover(real):
+    real.event(blindsCurrentLevel=20)
+    real.event(blindsCurrentLevel=40)
+    assert real.device.direction == real.device.CLOSING
+    assert real.cover.writes == 2
+    real.clock.advance(SETTLE)
+    assert real.device.direction is None
+    assert real.cover.writes == 3
+
+
+@pytest.mark.parametrize("level, target", [
+    (100, 100),  # closed with a command
+    (60, 0),     # moved with the remote: the target stays where it was
+])
+def test_the_reconnect_resync_replays_a_finished_move_without_a_direction(real, level, target):
+    # Review finding 3: the blind moved while the WebSocket was down; the
+    # resync replays /devices as events.
+    real.listener._resyncing = True
+    try:
+        real.event(blindsCurrentLevel=level, blindsTargetLevel=target)
+    finally:
+        real.listener._resyncing = False
+    assert real.device.direction is None
+    assert real.cover.writes == 1
+    # The resynced level is where the next move starts.
+    real.event(blindsCurrentLevel=level - 10)
+    assert real.device.direction == real.device.OPENING

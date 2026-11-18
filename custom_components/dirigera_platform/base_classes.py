@@ -572,7 +572,10 @@ class ikea_blinds_device(ikea_base_device):
         """True in the window after a stop, while the blind may still coast.
 
         Level reports in it are no movement. It ends SETTLE_SECONDS after the
-        last of them, or at once with a new target or a move command."""
+        stop, or at once with a new target or a move command. Fixed rather
+        than restarted by each report, so a move begun with the remote in it
+        is late by at most that much; how far a blind coasts is not measured,
+        so there is no distance rule."""
         if (self._stop_requested
                 and self._json_data.attributes.blinds_target_level != self._stop_target_level):
             self._stop_requested = False
@@ -622,12 +625,11 @@ class ikea_blinds_device(ikea_base_device):
         level, target = self._levels()
         seen_level, seen_target = self._seen_level, self._seen_target
         self._seen_level, self._seen_target = level, target
-        level_changed = level is not None and seen_level is not None and level != seen_level
         if self.stop_requested:
-            if level_changed:
-                self._arm_settle()  # still coasting
+            # Coasting. Its reports do not extend the window: a move started
+            # with the remote meanwhile gets its direction when it ends.
             return
-        if level_changed:
+        if level is not None and seen_level is not None and level != seen_level:
             if level == target:
                 self._set_direction(None)  # arrived
             else:
@@ -669,7 +671,6 @@ class ikea_blinds_device(ikea_base_device):
         """For a command: once the hub accepted it, the blind is on its way."""
         def accepted():
             self._stop_requested = False
-            self._seen_target = target
             self._set_direction(self._direction_to(target))
         return accepted
 

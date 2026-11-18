@@ -17,9 +17,9 @@ opening. A command sets the direction at once, so the UI reacts before the
 first level report. When no level report has arrived for SETTLE_SECONDS, or
 the level reached the target, the blind is open or closed again.
 
-A stop opens a window of the same length in which the blind may coast: level
-reports in it are no movement. Once no report came for SETTLE_SECONDS, the
-next change is a movement again, also one started with the remote.
+A stop opens a window of SETTLE_SECONDS in which the blind may coast: level
+reports in it are no movement, and they do not extend it. After it the next
+change is a movement again, also one started with the remote.
 
 The device classes are loaded as in test_blinds_stop.py, with the real bodies
 and without Home Assistant. Time is a fake clock: nothing here sleeps. The
@@ -255,15 +255,36 @@ def test_stop_ends_the_movement_and_a_coasting_report_does_not_restart_it():
     assert (_direction(entity), entity.current_cover_position) == ("", 48)
 
 
-def test_coasting_reports_keep_the_stop_window_open():
+def test_the_stop_window_is_not_extended_by_reports():
+    # End review, finding 1: every report in the window used to restart it,
+    # so a remote move that began inside it never got a direction (12
+    # reports over 24 s). The window now ends SETTLE_SECONDS after the stop.
     blind, device, entity, clock = _entity(current=40, target=100)
     _report(device, blind, 50)
     run(entity.async_stop_cover())
-    clock.advance(4)
-    _report(device, blind, 52)
-    clock.advance(4)  # 8 s after the stop, 4 s after the last coasting report
-    _report(device, blind, 53)
+    clock.advance(1)
+    _report(device, blind, 52)  # coasting, inside the window
     assert (_direction(entity), device.stop_requested) == ("", True)
+    level = 52
+    for _ in range(12):  # then the remote, a report every 2 s
+        clock.advance(2)
+        level += 3  # ends at 88, short of the target (100 ends the move)
+        _report(device, blind, level)
+    assert (_direction(entity), device.stop_requested) == ("closing", False)
+
+
+def test_a_remote_move_begun_in_the_window_has_a_direction_from_its_end():
+    blind, device, entity, clock = _entity(current=40, target=100)
+    _report(device, blind, 50)
+    run(entity.async_stop_cover())
+    clock.advance(2)
+    _report(device, blind, 55)
+    clock.advance(2)
+    _report(device, blind, 60)
+    assert _direction(entity) == ""
+    clock.advance(2)  # 6 s after the stop: the window has ended
+    _report(device, blind, 65)
+    assert _direction(entity) == "closing"
 
 
 def test_after_the_stop_window_a_remote_move_has_a_direction_again():

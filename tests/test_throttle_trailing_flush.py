@@ -147,6 +147,16 @@ def test_first_push_is_not_throttled():
     assert bc.ikea_base_device._push_throttled(listener, False) is False
 
 
+def test_first_push_is_not_throttled_shortly_after_boot(monkeypatch):
+    # time.monotonic() counts from boot on Linux; a CI runner can be only
+    # seconds old. The first push must not be throttled there either.
+    bc = _load_base_classes()
+    listener = FakeListener(throttle=60)
+    monkeypatch.setattr(bc.time, "monotonic", lambda: 5.0)
+    assert bc.ikea_base_device._push_throttled(listener, False) is False
+    assert listener.hass.loop.later_calls == []
+
+
 def test_throttled_push_arms_a_trailing_flush():
     """The regression: a dropped push must instead be deferred."""
     bc = _load_base_classes()

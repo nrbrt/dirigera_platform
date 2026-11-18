@@ -312,9 +312,12 @@ class ikea_base_device:
         if throttle <= 0:
             return False
         now = time.monotonic()
-        elapsed = now - getattr(listener, "_ha_last_push_at", 0.0)
-        if elapsed < throttle:
-            ikea_base_device._arm_trailing_flush(listener, throttle - elapsed)
+        # None = never pushed. Not 0.0: time.monotonic() counts from boot on
+        # Linux, so within `throttle` seconds of boot a 0.0 default made the
+        # very first push look throttled.
+        last = getattr(listener, "_ha_last_push_at", None)
+        if last is not None and now - last < throttle:
+            ikea_base_device._arm_trailing_flush(listener, throttle - (now - last))
             return True
         listener._ha_last_push_at = now
         return False

@@ -373,9 +373,10 @@ def test_update_entity_after_a_finished_move_shows_no_movement_and_writes(pushes
     run(device.async_update())
     assert _direction(entity) == ""
     assert len(pushes) - before == 1
-    device._json_data.attributes.blinds_current_level = 70
+    # Measured from the fetched 60, not the 20 before: down to 50 is opening.
+    device._json_data.attributes.blinds_current_level = 50
     device.async_schedule_update_ha_state(False)
-    assert _direction(entity) == "closing"
+    assert _direction(entity) == "opening"
 
 
 def test_removing_the_entity_cancels_the_wait():

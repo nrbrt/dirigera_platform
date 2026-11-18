@@ -30,6 +30,7 @@ from .hub_event_listener import (
     get_device_by_identifier,
     hub_event_listener,
     live_writes,
+    note_command,
     registry_entry,
     replace_model,
     to_snake_case,
@@ -611,6 +612,9 @@ class ikea_bulb(LightEntity):
             raise
         for key, value in self._pending.accepted(command).items():
             setattr(self._json_data.attributes, key, value)
+        # Newer than a resync fetch on its way, also once the pending record
+        # above is settled: same rule as ikea_base_device._command (#207).
+        note_command(self)
         # Write this light's state, and that of the device set that follows
         # it: this change does not pass the listener, whose cascade otherwise
         # updates the set (review of the merge with #76, 16-11-2026). The light

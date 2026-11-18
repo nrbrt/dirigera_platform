@@ -84,7 +84,9 @@ class _StubDevice:
 class _Writer:
     """Stands in for the hub's writer (test_hub_writer.py): runs it at once."""
 
-    async def run(self, func, *args):
+    async def run(self, func, *args, started=None):
+        if started is not None:
+            started()
         return func(*args)
 
 

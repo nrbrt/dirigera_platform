@@ -256,7 +256,13 @@ class ikea_base_device:
         model on top of the setter. A command that fails writes nothing.
 
         Every command method of a device goes through here."""
-        result = await writer_for(self._hub).run(fn, *args)
+        # Noted when the request goes out (started, on the loop) and again
+        # after it: the setter writes the model in the writer's executor
+        # thread, so an older resync snapshot can be applied on the loop
+        # before this resumes, and it must not win (#207). The second note is
+        # for a fetch that began while the request was out. Same rule as
+        # ikea_bulb._send.
+        result = await writer_for(self._hub).run(fn, *args, started=lambda: note_command(self))
         if accepted is not None:
             accepted()
         note_command(self)

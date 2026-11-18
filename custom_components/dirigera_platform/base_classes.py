@@ -604,20 +604,20 @@ class ikea_blinds_device(ikea_base_device):
         super().async_schedule_update_ha_state(force_refresh)
 
     async def async_update(self):
-        # A poll replaces the model; a level change it brings is a movement
-        # too. Home Assistant writes only the entity it polled, which may be
-        # the battery sensor, so a new direction is written here.
+        # Blinds are not polled; this is homeassistant.update_entity. The
+        # fetched model is a snapshot like a resync's: what changed before it
+        # is not a movement now. Home Assistant writes only the entity it
+        # updated, which may be the battery sensor, so all are written here.
         await super().async_update()
-        before = self._direction
-        self._observe_movement()
-        if self._direction != before:
-            super().async_schedule_update_ha_state(False)
+        self.state_resynced()
+        super().async_schedule_update_ha_state(False)
 
     def state_resynced(self) -> None:
-        """The reconnect resync replaced the model with the hub's.
+        """The model was refreshed from a snapshot of the hub: a resync (after
+        a reconnect, or the safety net) or update_entity.
 
-        What changed while the WebSocket was down already happened: it is not
-        a movement now, and the next move starts from here."""
+        What changed before the snapshot already happened: it is not a
+        movement now, and the next move starts from here."""
         self._seen_level, self._seen_target = self._levels()
 
     def _levels(self):

@@ -361,22 +361,21 @@ def test_a_refused_command_after_a_stop_keeps_the_stop():
 
 # --- the poll and removal ----------------------------------------------------------
 
-def test_a_level_change_seen_by_the_poll_is_a_movement_and_is_written(pushes):
+def test_update_entity_after_a_finished_move_shows_no_movement_and_writes(pushes):
+    # End review, finding 5a: homeassistant.update_entity (blinds are no
+    # longer polled) fetches the blind. A move that ended meanwhile, with the
+    # remote, is not a movement now; the fetched level is where the next one
+    # starts. Every entity of the blind is written: Home Assistant writes
+    # only the one it updated, which may be the battery sensor.
     blind, device, entity, _ = _entity(current=20, target=20)
-    device._json_data = make_blind(current=35, target=100)  # what the poll fetched
+    device._json_data = make_blind(current=60, target=20)  # what the fetch brought
     before = len(pushes)
     run(device.async_update())
-    assert _direction(entity) == "closing"
-    # Review finding 5: the battery sensor's poll refreshes the device too,
-    # and Home Assistant then writes only that sensor.
+    assert _direction(entity) == ""
     assert len(pushes) - before == 1
-
-
-def test_a_poll_without_change_writes_nothing_extra(pushes):
-    blind, device, entity, _ = _entity(current=20, target=20)
-    before = len(pushes)
-    run(device.async_update())
-    assert len(pushes) - before == 0
+    device._json_data.attributes.blinds_current_level = 70
+    device.async_schedule_update_ha_state(False)
+    assert _direction(entity) == "closing"
 
 
 def test_removing_the_entity_cancels_the_wait():

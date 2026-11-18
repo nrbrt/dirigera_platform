@@ -69,7 +69,8 @@ class Net:
 
     async def interval(self) -> None:
         async_fire_time_changed(self.hass, dt_util.utcnow() + timedelta(seconds=SAFETY_NET_INTERVAL + 1))
-        await self.hass.async_block_till_done()
+        # The run is a background task of the entry: wait for it too.
+        await self.hass.async_block_till_done(wait_background_tasks=True)
 
 
 @pytest.fixture

@@ -159,3 +159,42 @@ def test_air_purifier_commands_write_state(env):
     env.run(lambda: device.async_turn_off())
     assert len(fan.states) == 5
     assert [sent[1] for sent in env.hub.sent[-2:]] == ["fanMode", "motorState"]
+
+
+# --- #207 end review, finding 4: a command during a resync fetch -------------
+#
+# The safety net fetches /devices every five minutes. A command accepted while
+# that fetch is on its way is newer than the snapshot; the snapshot must not
+# put the old value back. live_writes knew only what hub events wrote.
+
+@pytest.mark.parametrize("make, command, row_attributes, kept", [
+    (lambda env: env.bc.ikea_blinds_device(env.hass, env.finder, _model(
+        env.hub, "blind_1", blinds_target_level=0, blinds_current_level=0, blinds_state="up")),
+     lambda device: device.async_close_cover,
+     {"blindsTargetLevel": 0, "batteryPercentage": 80}, {"batteryPercentage": 80}),
+    (lambda env: env.bc.ikea_blinds_device(env.hass, env.finder, _model(
+        env.hub, "blind_1", blinds_target_level=100, blinds_current_level=40, blinds_state="down")),
+     lambda device: device.async_stop_cover,
+     {"blindsState": "down", "blindsCurrentLevel": 41}, {"blindsCurrentLevel": 41}),
+    (lambda env: env.bc.ikea_outlet_device(env.hass, env.finder, _model(env.hub, "outlet_1", is_on=False)),
+     lambda device: device.async_turn_on,
+     {"isOn": False}, {}),
+])
+def test_a_command_during_a_resync_fetch_is_not_undone_by_the_snapshot(env, make, command, row_attributes, kept):
+    hel = sys.modules["dp_under_test.hub_event_listener"]
+    device = make(env)
+    with hel.live_writes() as newer:  # what the resync opens while it fetches
+        env.run(command(device))
+    asyncio.set_event_loop(asyncio.new_event_loop())  # the listener asks for one
+    listener = hel.hub_event_listener(SimpleNamespace(websocket_base_url=HUB_KEY), env.hass)
+    row = {"id": device._json_data.id, "deviceType": "x", "attributes": dict(row_attributes)}
+    assert listener._without_newer(row, newer)["attributes"] == kept
+
+
+def test_a_command_outside_a_fetch_notes_nothing(env):
+    hel = sys.modules["dp_under_test.hub_event_listener"]
+    device = env.bc.ikea_outlet_device(env.hass, env.finder, _model(env.hub, "outlet_1", is_on=False))
+    env.run(device.async_turn_on)
+    with hel.live_writes() as newer:
+        pass
+    assert newer.attributes(device) == frozenset()

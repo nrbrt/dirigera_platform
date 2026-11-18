@@ -269,6 +269,25 @@ def live_writes():
         _open_live_writes.remove(writes)
 
 
+def attribute_values(entity) -> dict:
+    """The values of the entity's attributes model, to compare after a command."""
+    attributes = getattr(getattr(entity, "_json_data", None), "attributes", None)
+    return dict(vars(attributes)) if attributes is not None else {}
+
+
+def note_command_writes(entity, before: dict) -> None:
+    """A command the hub accepted changed the entity's model (the library's
+    setters write it). What changed since `before` is newer than a fetch on
+    its way, as an event would be (#207: the safety net fetches every few
+    minutes, so a command during it is no longer rare)."""
+    if not _open_live_writes:
+        return
+    changed = {key for key, value in attribute_values(entity).items()
+               if key not in before or before[key] != value}
+    for writes in _open_live_writes:
+        writes._note(entity, True, changed)
+
+
 def replace_model(entity, fetched, newer):
     """Make `fetched` the entity's model. What hub messages wrote to the old
     model while it was fetched (`newer`, from live_writes) is newer than the
@@ -1381,10 +1400,14 @@ class hub_event_listener(threading.Thread):
         attributes = newer.attributes(entry.entity)
         if not fields and not attributes:
             return device
-        row = {key: value for key, value in device.items() if key not in fields}
+        # An event notes hub keys, a command the model's names: compare both
+        # as model names.
+        fields = {to_snake_case(key) for key in fields}
+        attributes = {to_snake_case(key) for key in attributes}
+        row = {key: value for key, value in device.items() if to_snake_case(key) not in fields}
         if isinstance(row.get("attributes"), dict):
             row["attributes"] = {key: value for key, value in row["attributes"].items()
-                                 if key not in attributes}
+                                 if to_snake_case(key) not in attributes}
         return row
 
     def create_listener(self):

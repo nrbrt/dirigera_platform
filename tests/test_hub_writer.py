@@ -393,6 +393,10 @@ def _load_devices():
         "ikea_base_device": _StubDevice, "math": math,
         "logger": logging.getLogger(__name__),
         "writer_for": hub_writer.writer_for,
+        # Noting what a command wrote for a fetch on its way is tested in
+        # test_command_writes_state.py; nothing is fetching here.
+        "attribute_values": lambda entity: {},
+        "note_command_writes": lambda entity, before: None,
     }
     devices = _lift("base_classes.py",
                     ["ikea_outlet_device", "ikea_blinds_device", "ikea_starkvind_air_purifier_device"],

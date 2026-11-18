@@ -28,7 +28,10 @@ from dirigera.devices.light_sensor import LightSensor
 from dirigera.devices.controller import Controller
 from dirigera.devices.air_purifier import FanModeEnum
 
-from .hub_event_listener import hub_event_listener, registry_entry, live_writes, replace_model
+from .hub_event_listener import (
+    hub_event_listener, registry_entry, live_writes, replace_model,
+    attribute_values, note_command_writes,
+)
 from .hub_writer import writer_for
 from .const import DOMAIN, DEFAULT_POWER_PUSH_THROTTLE
 from .compat import MICROGRAMS_PER_CUBIC_METER, PARTS_PER_MILLION
@@ -254,9 +257,11 @@ class ikea_base_device:
         model on top of the setter. A command that fails writes nothing.
 
         Every command method of a device goes through here."""
+        before = attribute_values(self)
         result = await writer_for(self._hub).run(fn, *args)
         if accepted is not None:
             accepted()
+        note_command_writes(self, before)
         self.async_schedule_update_ha_state(False)
         return result
 

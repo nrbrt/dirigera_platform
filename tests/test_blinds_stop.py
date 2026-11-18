@@ -116,6 +116,10 @@ def _load_classes():
         "ikea_base_device_sensor": _StubSensor,
         "logger": SimpleNamespace(debug=lambda *a, **k: None),
         "writer_for": lambda hub: _Writer(),
+        # What a command wrote is noted for a resync fetch on its way
+        # (test_command_writes_state.py tests that); nothing is fetching here.
+        "attribute_values": lambda entity: {},
+        "note_command_writes": lambda entity, before: None,
     }
     # The real command path of the base device, on the stub.
     base = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "ikea_base_device")

@@ -53,17 +53,22 @@ class SceneSync:
 
     The safety net (#207) calls async_refresh every SAFETY_NET_INTERVAL with
     one GET /scenes. A renamed scene gets its new name and icon; a new one
-    gets an entity, made as at setup; one the hub no longer lists becomes
-    unavailable, and available again if it comes back. It is not removed:
-    one answer of the hub is not certain enough to take away an entity the
-    user's automations may use (the same caution as the safety net's device
-    sets). Whether the hub sends an event for a scene rename is not known."""
+    gets an entity, made as at setup. One the hub leaves out of
+    MISSES_BEFORE_UNAVAILABLE answers in a row becomes unavailable, and
+    available again when it comes back: a single empty or partial answer
+    (a busy hub) is not enough, and the integration does not remove the
+    entity itself. After a reload a scene the hub no longer has is not made
+    again, and Home Assistant then lets the user remove its entity. Whether
+    the hub sends an event for a scene rename is not known."""
+
+    MISSES_BEFORE_UNAVAILABLE = 2
 
     def __init__(self, hass: HomeAssistant, hub: HubX, entities, async_add_entities) -> None:
         self._hass = hass
         self._hub = hub
         self._entities = {entity.unique_id: entity for entity in entities}
         self._add_entities = async_add_entities
+        self._misses = {}  # scene id -> answers in a row without it
 
     async def async_refresh(self) -> None:
         scenes = await self._hass.async_add_executor_job(self._hub.get_scenes)
@@ -81,11 +86,20 @@ class SceneSync:
             else:
                 entity.hub_listed(scene)
         for scene_id, entity in self._entities.items():
-            if scene_id not in listed:
+            if scene_id in listed:
+                self._misses.pop(scene_id, None)
+                continue
+            misses = self._misses[scene_id] = self._misses.get(scene_id, 0) + 1
+            if misses >= self.MISSES_BEFORE_UNAVAILABLE:
                 entity.hub_unlisted()
         if new:
             logger.info(f"New scenes on the hub: {[entity.name for entity in new]}")
-            self._add_entities(new)
+            try:
+                self._add_entities(new)
+            except Exception:  # pylint: disable=broad-except
+                # Not retried: the entity stays known, so the next run does
+                # not make it again. A reload brings it.
+                logger.warning(f"Could not add new scenes {[e.unique_id for e in new]}", exc_info=True)
 
 class ikea_scene(Scene):
     """Implements scene entity for a Dirigera scene."""
@@ -147,6 +161,7 @@ class ikea_scene(Scene):
             # this used to write to a never-read _dirigera_scene leftover,
             # so hub-side scene renames/icon changes never propagated.
             self._scene = await self.hass.async_add_executor_job(self._hub.get_scene_by_id, self.unique_id)
+            self._attr_available = True  # the hub has it
         except Exception as ex:
             logger.error("Error encountered on update of '%s' (%s)", self.name, self.unique_id)
             logger.error(ex)

@@ -72,6 +72,11 @@ def _state(hub, scene_id):
     return hub.hass.states.get(entity_id)
 
 
+async def _run(hub, n):
+    """The n-th run of the safety net since setup."""
+    await _later(hub.hass, n * (SAFETY_NET_INTERVAL + 1))
+
+
 async def _later(hass, seconds):
     async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=seconds))
     # The run is a background task of the entry: wait for it too.
@@ -92,18 +97,53 @@ async def test_the_safety_net_brings_scenes_in_line(hub):
              "info": {"name": "New in the app", "icon": "scenes_clean_sparkles"}}
     hub.fake.scenes.append(added)
 
-    await _later(hub.hass, SAFETY_NET_INTERVAL + 1)
+    await _run(hub, 1)
 
     assert hub.gets.count("scenes") == 1
     assert _state(hub, "device-21").attributes["friendly_name"] == "Renamed in the app"
-    assert _state(hub, "device-22").state == "unavailable"
     assert _state(hub, "device-99").attributes["friendly_name"] == "New in the app"
+    # Missing from one answer is not enough to be gone ...
+    assert _state(hub, "device-22").state != "unavailable"
+    await _run(hub, 2)
+    # ... from two in a row it is.
+    assert _state(hub, "device-22").state == "unavailable"
 
     # Back on the hub: available again, same entity.
     hub.fake.scenes.append({**hub.scene("device-21"), "id": "device-22",
                             "info": {"name": "Scene 2", "icon": "scenes_clean_sparkles"}})
-    await _later(hub.hass, 2 * SAFETY_NET_INTERVAL + 2)
+    await _run(hub, 3)
     assert _state(hub, "device-22").state != "unavailable"
+
+
+async def test_an_empty_answer_once_is_not_every_scene_gone(hub):
+    # Review: an empty or partial answer (a hub that is busy, starting up)
+    # made every scene unavailable. A user can delete all scenes, so an empty
+    # answer is not ignored: it counts once two answers in a row agree.
+    scenes = list(hub.fake.scenes)
+    hub.fake.scenes.clear()
+    await _run(hub, 1)
+    assert _state(hub, "device-21").state != "unavailable"
+    hub.fake.scenes.extend(scenes)
+    await _run(hub, 2)                       # back: the miss is forgotten
+    hub.fake.scenes.clear()
+    await _run(hub, 3)
+    assert _state(hub, "device-21").state != "unavailable"
+    await _run(hub, 4)
+    assert _state(hub, "device-21").state == "unavailable"
+    hub.fake.scenes.extend(scenes)
+    await _run(hub, 5)
+    assert _state(hub, "device-21").state != "unavailable"
+
+
+async def test_the_integrations_own_scenes_get_no_entity(hub):
+    # The empty scenes the integration makes for remote buttons.
+    own = {**hub.scene("device-21"), "id": "device-98",
+           "info": {"name": "dirigera_integration_empty_scene_device-07_1_singlePress",
+                    "icon": "scenes_cake"}}
+    hub.fake.scenes.append(own)
+    await _run(hub, 1)
+    entries = er.async_entries_for_config_entry(er.async_get(hub.hass), hub.entry.entry_id)
+    assert [e for e in entries if e.unique_id == "device-98"] == []
 
 
 async def test_a_failing_scene_fetch_does_not_stop_the_device_resync(hub):
@@ -135,3 +175,17 @@ def _state_by_uid(hub, domain, unique_id):
     entries = er.async_entries_for_config_entry(er.async_get(hub.hass), hub.entry.entry_id)
     entity_id = next(e.entity_id for e in entries if e.domain == domain and e.unique_id == unique_id)
     return hub.hass.states.get(entity_id)
+
+
+async def test_update_entity_makes_a_scene_the_hub_has_available_again(hub):
+    scenes = list(hub.fake.scenes)
+    hub.fake.scenes.clear()
+    await _run(hub, 1)
+    await _run(hub, 2)
+    assert _state(hub, "device-21").state == "unavailable"
+    hub.fake.scenes.extend(scenes)
+    entity_id = _state(hub, "device-21").entity_id
+    await hub.hass.services.async_call("homeassistant", "update_entity",
+                                       {"entity_id": entity_id}, blocking=True)
+    await hub.hass.async_block_till_done()
+    assert hub.hass.states.get(entity_id).state != "unavailable"

@@ -524,6 +524,11 @@ class ikea_water_sensor(ikea_base_device_sensor, BinarySensorEntity):
          
 class ikea_blinds_device(ikea_base_device):
     BLINDS_STATE_STOPPED = "stopped"
+    OPENING = "opening"
+    CLOSING = "closing"
+    # Without a level report for this long, a moving blind is open or closed
+    # again (#207). Short: a moving blind reports its level often.
+    SETTLE_SECONDS = 5
 
     def __init__(self, hass:core.HomeAssistant, hub:Hub, blind:Blind):
         logger.debug("IkeaBlinds ctor...")
@@ -531,6 +536,11 @@ class ikea_blinds_device(ikea_base_device):
         # Set by async_stop_cover, see stop_requested for why it exists.
         self._stop_requested = False
         self._stop_target_level = None
+        # Which way the blind is moving (#207), from what it does: the change
+        # in its current level, or a command. None when it is not moving.
+        self._direction = None
+        self._settle_handle = None
+        self._seen_level, self._seen_target = self._levels()
     
     @property
     def device_class(self) -> str:
@@ -549,22 +559,100 @@ class ikea_blinds_device(ikea_base_device):
             self._stop_requested = False
         return self._stop_requested
 
+    @property
+    def direction(self) -> str | None:
+        """OPENING, CLOSING, or None when the blind is not moving."""
+        if self.stop_requested:
+            return None
+        return self._direction
+
+    # --- the direction (#207) ---------------------------------------------
+    #
+    # The target level cannot tell: a blind moved with its remote changes
+    # only its current level, and the target of an earlier command stays.
+    # The hub's levels run from 0 (open) to 100 (closed), so a rising
+    # current level is closing.
+
+    def async_schedule_update_ha_state(self, force_refresh: bool = False) -> None:
+        # Every hub event and every command of this device ends here.
+        self._observe_movement()
+        super().async_schedule_update_ha_state(force_refresh)
+
+    async def async_update(self):
+        # A poll replaces the model; a level change it brings is a movement too.
+        await super().async_update()
+        self._observe_movement()
+
+    def _levels(self):
+        """(current, target) as the hub reported them; None until it did."""
+        attributes = self._json_data.attributes
+        return (getattr(attributes, "blinds_current_level", None),
+                getattr(attributes, "blinds_target_level", None))
+
+    def _observe_movement(self) -> None:
+        level, target = self._levels()
+        seen_level, seen_target = self._seen_level, self._seen_target
+        self._seen_level, self._seen_target = level, target
+        if self.stop_requested:
+            self._set_direction(None)
+            return
+        if level is not None and seen_level is not None and level != seen_level:
+            self._set_direction(self.CLOSING if level > seen_level else self.OPENING)
+        elif target is not None and level is not None and target != seen_target:
+            # A new target from the hub (the IKEA app, another controller).
+            self._set_direction(self._direction_to(target))
+
+    def _direction_to(self, target) -> str | None:
+        level = self._levels()[0]
+        if target is None or level is None or target == level:
+            return None
+        return self.CLOSING if target > level else self.OPENING
+
+    def _set_direction(self, direction) -> None:
+        self._direction = direction
+        self.cancel_settle()
+        if direction is not None:
+            self._settle_handle = asyncio.get_running_loop().call_later(
+                self.SETTLE_SECONDS, self._settled)
+
+    def _settled(self) -> None:
+        self._settle_handle = None
+        self._direction = None
+        self.async_schedule_update_ha_state(False)
+
+    def cancel_settle(self) -> None:
+        if self._settle_handle is not None:
+            self._settle_handle.cancel()
+            self._settle_handle = None
+
+    def _moving_to(self, target):
+        """For a command: once the hub accepted it, the blind is on its way."""
+        def accepted():
+            self._stop_requested = False
+            self._seen_target = target
+            self._set_direction(self._direction_to(target))
+        return accepted
+
+    # --- commands -----------------------------------------------------------
+
     def _send_stop(self) -> None:
         """Blocking: ask the hub to halt the blind. Run by the hub's writer."""
         self._json_data.set_state(BlindsStateEnum.STOPPED)
+
+    async def _move(self, level: int) -> None:
+        self._stop_requested = False
+        await self._command(self._json_data.set_target_level, level,
+                            accepted=self._moving_to(level))
     
     async def async_open_cover(self):
-        self._stop_requested = False
-        await self._command(self._json_data.set_target_level, 0)
+        await self._move(0)
 
     async def async_close_cover(self):
-        self._stop_requested = False
-        await self._command(self._json_data.set_target_level, 100)
+        await self._move(100)
 
     async def async_set_cover_position(self, position:int):
         if position >= 0 and position <= 100:
-            self._stop_requested = False
-            await self._command(self._json_data.set_target_level,100 - position)
+            await self._move(100 - position)
 
     async def async_stop_cover(self):
         if not self.can_stop:
@@ -577,6 +665,7 @@ class ikea_blinds_device(ikea_base_device):
         self._stop_target_level = attributes.blinds_target_level
         self._stop_requested = True
         attributes.blinds_state = self.BLINDS_STATE_STOPPED
+        self._set_direction(None)
     
 class ikea_blinds_sensor(ikea_base_device_sensor, CoverEntity):
     def __init__(self, device:ikea_blinds_device):
@@ -621,29 +710,16 @@ class ikea_blinds_sensor(ikea_base_device_sensor, CoverEntity):
 
     @property
     def is_closing(self):
-        if self._device.stop_requested:
-            return False
-
-        if self.current_cover_position is None or self.target_cover_position is None:
-            return False
-
-        if self.current_cover_position != 0 and self.target_cover_position == 0:
-            return True
-
-        return False
+        return self._device.direction == self._device.CLOSING
 
     @property
     def is_opening(self):
-        if self._device.stop_requested:
-            return False
+        return self._device.direction == self._device.OPENING
 
-        if self.current_cover_position is None or self.target_cover_position is None:
-            return False
-
-        if self.current_cover_position != 100 and self.target_cover_position == 100:
-            return True
-
-        return False
+    async def async_will_remove_from_hass(self) -> None:
+        # A pending return to open/closed must not write to a removed entity.
+        self._device.cancel_settle()
+        await super().async_will_remove_from_hass()
 
     async def async_open_cover(self, **kwargs):
         await self._device.async_open_cover()

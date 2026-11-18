@@ -284,10 +284,12 @@ def live_writes():
 
 
 def note_command(entity) -> None:
-    """A command the hub accepted wrote to the entity's model. Its attributes
-    are newer than a fetch on its way, as an event's would be (#207: the
-    safety net fetches every few minutes, so a command during it is no
-    longer rare). Event loop only."""
+    """A command for the entity: noted when its request goes out and again
+    after the hub accepted it. Its attributes are newer than a fetch on its
+    way, as an event's would be (#207: the safety net fetches every few
+    minutes, so a command during it is no longer rare). A command that then
+    fails has still cost that device the attributes of one snapshot; the
+    next resync or event brings them. Event loop only."""
     for writes in _open_live_writes:
         writes._commanded.add(entity)
 

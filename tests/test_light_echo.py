@@ -96,6 +96,7 @@ def _load_bulb():
         "writer_for": hub_writer.writer_for,
         "hub_event_listener": L,
         "registry_entry": hel.registry_entry,
+        "note_command": hel.note_command,
         "to_snake_case": hel.to_snake_case,
         "PendingCommand": getattr(pc, "PendingCommand", None),
         "asyncio": asyncio,

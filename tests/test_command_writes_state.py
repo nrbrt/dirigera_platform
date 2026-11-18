@@ -171,14 +171,14 @@ def test_air_purifier_commands_write_state(env):
     (lambda env: env.bc.ikea_blinds_device(env.hass, env.finder, _model(
         env.hub, "blind_1", blinds_target_level=0, blinds_current_level=0, blinds_state="up")),
      lambda device: device.async_close_cover,
-     {"blindsTargetLevel": 0, "batteryPercentage": 80}, {"batteryPercentage": 80}),
+     {"blindsTargetLevel": 0, "batteryPercentage": 80}, None),
     (lambda env: env.bc.ikea_blinds_device(env.hass, env.finder, _model(
         env.hub, "blind_1", blinds_target_level=100, blinds_current_level=40, blinds_state="down")),
      lambda device: device.async_stop_cover,
-     {"blindsState": "down", "blindsCurrentLevel": 41}, {"blindsCurrentLevel": 41}),
+     {"blindsState": "down", "blindsCurrentLevel": 41}, None),
     (lambda env: env.bc.ikea_outlet_device(env.hass, env.finder, _model(env.hub, "outlet_1", is_on=False)),
      lambda device: device.async_turn_on,
-     {"isOn": False}, {}),
+     {"isOn": False}, None),
 ])
 def test_a_command_during_a_resync_fetch_is_not_undone_by_the_snapshot(env, make, command, row_attributes, kept):
     hel = sys.modules["dp_under_test.hub_event_listener"]
@@ -187,8 +187,12 @@ def test_a_command_during_a_resync_fetch_is_not_undone_by_the_snapshot(env, make
         env.run(command(device))
     asyncio.set_event_loop(asyncio.new_event_loop())  # the listener asks for one
     listener = hel.hub_event_listener(SimpleNamespace(websocket_base_url=HUB_KEY), env.hass)
-    row = {"id": device._json_data.id, "deviceType": "x", "attributes": dict(row_attributes)}
-    assert listener._without_newer(row, newer)["attributes"] == kept
+    row = {"id": device._json_data.id, "deviceType": "x", "isReachable": True,
+           "attributes": dict(row_attributes)}
+    # The commanded device keeps all its attributes for this one snapshot
+    # (the next resync or event brings the rest); its own fields still apply.
+    assert listener._without_newer(row, newer).get("attributes", kept) == kept
+    assert listener._without_newer(row, newer)["isReachable"] is True
 
 
 def test_a_command_outside_a_fetch_notes_nothing(env):
@@ -197,4 +201,20 @@ def test_a_command_outside_a_fetch_notes_nothing(env):
     env.run(device.async_turn_on)
     with hel.live_writes() as newer:
         pass
-    assert newer.attributes(device) == frozenset()
+    assert newer.commanded(device) is False
+
+
+def test_a_command_that_writes_the_value_the_model_already_had_is_noted(env):
+    # Follow-up review, finding 3: the model says on (an event that turned
+    # the plug off was missed), the user turns it on during the fetch. The
+    # setter writes the value the model already had, so a before/after diff
+    # notes nothing, and the snapshot's isOn false wins while the plug is on.
+    hel = sys.modules["dp_under_test.hub_event_listener"]
+    device = env.bc.ikea_outlet_device(env.hass, env.finder, _model(env.hub, "outlet_1", is_on=True))
+    with hel.live_writes() as newer:
+        env.run(device.async_turn_on)
+    asyncio.set_event_loop(asyncio.new_event_loop())
+    listener = hel.hub_event_listener(SimpleNamespace(websocket_base_url=HUB_KEY), env.hass)
+    row = {"id": "outlet_1", "deviceType": "outlet", "isReachable": True,
+           "attributes": {"isOn": False}}
+    assert "isOn" not in listener._without_newer(row, newer).get("attributes", {})

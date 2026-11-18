@@ -63,6 +63,7 @@ def _load():
         "writer_for": hub_writer.writer_for,
         # _send also writes the device set that follows the light (merge with #76)
         "hub_event_listener": SimpleNamespace(get_registry_entry=lambda hub_key, light_id: None),
+        "note_command": lambda entity: None,  # no resync fetch here
         "asyncio": asyncio,
         "LEVEL_AFTER_ON_S": 0.8,
     }

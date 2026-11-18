@@ -395,8 +395,7 @@ def _load_devices():
         "writer_for": hub_writer.writer_for,
         # Noting what a command wrote for a fetch on its way is tested in
         # test_command_writes_state.py; nothing is fetching here.
-        "attribute_values": lambda entity: {},
-        "note_command_writes": lambda entity, before: None,
+        "note_command": lambda entity: None,
     }
     devices = _lift("base_classes.py",
                     ["ikea_outlet_device", "ikea_blinds_device", "ikea_starkvind_air_purifier_device"],
@@ -431,7 +430,8 @@ def _load_bulb_send():
     namespace = {"HomeAssistantError": Exception, "DOMAIN": "dirigera_platform",
                  "logger": logging.getLogger(__name__), "writer_for": hub_writer.writer_for,
                  # _send also writes the device set that follows the light (merge with #76)
-                 "hub_event_listener": SimpleNamespace(get_registry_entry=lambda hub_key, light_id: None)}
+                 "hub_event_listener": SimpleNamespace(get_registry_entry=lambda hub_key, light_id: None),
+                 "note_command": lambda entity: None}  # no resync fetch here
     exec(compile(ast.fix_missing_locations(ast.Module(body=methods, type_ignores=[])), path, "exec"), namespace)
     return namespace
 

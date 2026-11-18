@@ -238,8 +238,12 @@ def _hold_back_energy_decrease(entity, key_attr, value_to_set) -> bool:
 # * the resync (after a reconnect, or the safety net) leaves them out of the
 #   device's row of the snapshot.
 #
-# Commands write models too (the library's setters): _command notes what it
-# changed (note_command_writes), so the snapshot does not put it back either.
+# Commands write models too (the library's setters, a light's accepted
+# values). Which keys a setter writes is not visible from here, and comparing
+# before and after misses a command that writes the value the model already
+# had (follow-up review of #207). So a command notes its entity as a whole
+# (note_command): the fetcher keeps all of that entity's attributes, for this
+# one snapshot. The next resync or event brings the rest.
 #
 # Event loop only, like everything that touches a model.
 _open_live_writes = []
@@ -248,10 +252,16 @@ _open_live_writes = []
 class _LiveWrites:
     def __init__(self):
         self._written = {}  # entity -> (hub keys of device fields, of attributes)
+        self._commanded = set()  # entities a command wrote to
 
     def _note(self, entity, attributes: bool, keys):
         if keys:
             self._written.setdefault(entity, (set(), set()))[attributes].update(keys)
+
+    def commanded(self, entity) -> bool:
+        """True when a command wrote to the entity's model since the fetch
+        began: all of its attributes are newer than the fetched ones."""
+        return entity in self._commanded
 
     def fields(self, entity) -> set:
         """Hub keys of the device's own fields written since the fetch began."""
@@ -273,23 +283,13 @@ def live_writes():
         _open_live_writes.remove(writes)
 
 
-def attribute_values(entity) -> dict:
-    """The values of the entity's attributes model, to compare after a command."""
-    attributes = getattr(getattr(entity, "_json_data", None), "attributes", None)
-    return dict(vars(attributes)) if attributes is not None else {}
-
-
-def note_command_writes(entity, before: dict) -> None:
-    """A command the hub accepted changed the entity's model (the library's
-    setters write it). What changed since `before` is newer than a fetch on
-    its way, as an event would be (#207: the safety net fetches every few
-    minutes, so a command during it is no longer rare)."""
-    if not _open_live_writes:
-        return
-    changed = {key for key, value in attribute_values(entity).items()
-               if key not in before or before[key] != value}
+def note_command(entity) -> None:
+    """A command the hub accepted wrote to the entity's model. Its attributes
+    are newer than a fetch on its way, as an event's would be (#207: the
+    safety net fetches every few minutes, so a command during it is no
+    longer rare). Event loop only."""
     for writes in _open_live_writes:
-        writes._note(entity, True, changed)
+        writes._commanded.add(entity)
 
 
 def replace_model(entity, fetched, newer):
@@ -297,6 +297,11 @@ def replace_model(entity, fetched, newer):
     model while it was fetched (`newer`, from live_writes) is newer than the
     hub's answer and is carried over."""
     old = entity._json_data
+    if newer.commanded(entity):
+        try:
+            fetched.attributes = old.attributes
+        except Exception as ex:
+            logger.warning(f"Could not keep the commanded attributes of {old.id}: {ex}")
     for source, target, keys in (
         (old, fetched, newer.fields(entity)),
         (getattr(old, "attributes", None), getattr(fetched, "attributes", None),
@@ -1406,16 +1411,15 @@ class hub_event_listener(threading.Thread):
             return device
         fields = newer.fields(entry.entity) - self._ROW_IDENTITY
         attributes = newer.attributes(entry.entity)
-        if not fields and not attributes:
+        commanded = newer.commanded(entry.entity)
+        if not fields and not attributes and not commanded:
             return device
-        # An event notes hub keys, a command the model's names: compare both
-        # as model names.
-        fields = {to_snake_case(key) for key in fields}
-        attributes = {to_snake_case(key) for key in attributes}
-        row = {key: value for key, value in device.items() if to_snake_case(key) not in fields}
-        if isinstance(row.get("attributes"), dict):
+        row = {key: value for key, value in device.items() if key not in fields}
+        if commanded:
+            row.pop("attributes", None)
+        elif isinstance(row.get("attributes"), dict):
             row["attributes"] = {key: value for key, value in row["attributes"].items()
-                                 if to_snake_case(key) not in attributes}
+                                 if key not in attributes}
         return row
 
     def create_listener(self):

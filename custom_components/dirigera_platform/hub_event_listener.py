@@ -129,7 +129,7 @@ def _field_value(model, name, raw):
 # dips to 5 kWh for 137 ms injected 5.982 kWh into the statistics three times in
 # two weeks; on a plug sitting at 263 kWh one dip would inject 263 kWh.
 #
-# The reconnect resync added for #39 replays raw /devices through this same
+# The resync (after a reconnect, #39, and the safety net, #207) replays raw /devices through this same
 # event path, and that bypasses the electricalSensor merge that get_outlets()
 # applies for split plugs (GRILLPLATS, TOFSMYGGA), so a stale or coarser value
 # can reach the entity there.
@@ -235,7 +235,11 @@ def _hold_back_energy_decrease(entity, key_attr, value_to_set) -> bool:
 #
 # * a refresh of one device, which replaces the entity's model, carries the
 #   values written meanwhile over to the new model (replace_model);
-# * the reconnect resync leaves them out of the device's row of the snapshot.
+# * the resync (after a reconnect, or the safety net) leaves them out of the
+#   device's row of the snapshot.
+#
+# Commands write models too (the library's setters): _command notes what it
+# changed (note_command_writes), so the snapshot does not put it back either.
 #
 # Event loop only, like everything that touches a model.
 _open_live_writes = []
@@ -1159,7 +1163,7 @@ class hub_event_listener(threading.Thread):
             id = self._registered_id(event_id, device_type)
             if id is None:
                 id = event_id
-                # During a reconnect resync we replay every device, so an
+                # During a resync (reconnect or safety net) we replay every device, so an
                 # unknown id here is just a device with no entity — skip it
                 # silently rather than firing discovery for it on every
                 # reconnect. See issue #39.
@@ -1344,10 +1348,12 @@ class hub_event_listener(threading.Thread):
         await self._resync_all_states("safety net")
 
     async def _resync_all_states(self, reason: str = "reconnect"):
-        """Re-pull current state for all devices after a reconnect and apply
-        it like events, so changes missed during the disconnect gap are caught
-        up. One /devices fetch (no per-device hammering); discovery is
-        suppressed during the replay. See issue #39.
+        """Re-pull current state for all devices and apply it like events:
+        after a reconnect, so changes missed during the disconnect gap are
+        caught up (#39), and as the safety net every SAFETY_NET_INTERVAL, for
+        what an event did not bring (#207). One /devices fetch (no per-device
+        hammering); discovery is suppressed during the replay, and an entity
+        with state_resynced() is told its model is a snapshot.
 
         The snapshot is as old as the moment the hub built it. Events that
         arrive while it is fetched are applied at once, as always, and what

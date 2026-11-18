@@ -794,8 +794,9 @@ class ikea_vindstyrka_device(ikea_base_device):
         super().__init__(hass, hub, json_data, hub.get_environment_sensor_by_id)
 
     async def async_update(self):
-        # Shared multi-entity throttle+lock: one hub request per device per 30s.
-        # See ikea_base_device._throttled_update for the rationale (issue #34).
+        # Not polled any more (#207): this runs only for
+        # homeassistant.update_entity. Shared multi-entity throttle+lock: one
+        # hub request per device per 30s (_throttled_update, issue #34).
         await self._throttled_update()
 
 class ikea_vindstyrka_temperature(ikea_base_device_sensor, SensorEntity):

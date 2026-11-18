@@ -138,8 +138,9 @@ async def add_environment_sensors(async_add_entities, env_devices, push_throttle
 
     # #40: the push-driven env sensors (temp / RH / current PM2.5 / VOC / CO2)
     # carry a class-default throttle; honour the configured interval here too,
-    # mirroring the outlet power sensors. Harmless on the poll-driven MIN/MAX
-    # PM2.5 (they do not push, so the throttle is never consulted for them).
+    # mirroring the outlet power sensors. MIN/MAX PM2.5 are the fixed range of
+    # the sensor and not polled (#207); they are written with the other
+    # entities of the device (events, the safety net), throttled the same.
     if push_throttle is not None:
         for entity in env_sensors:
             entity._ha_push_throttle_seconds = push_throttle

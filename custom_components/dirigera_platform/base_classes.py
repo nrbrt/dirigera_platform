@@ -53,6 +53,13 @@ def make_property(class_to_induce, name, value):
     setattr(class_to_induce, name, property(lambda self: getattr(self._json_data.attributes,name)))
 
 class ikea_base_device:
+    # Whether Home Assistant polls this device type: every polled entity
+    # fetches its device from the hub, every 15-30 s. With many devices that
+    # load made the hub unresponsive (#207), and nearly everything arrives
+    # over the WebSocket anyway. So polling is off unless a device type sets
+    # this, with the reason next to it.
+    polls_hub = False
+
     def __init__(self, hass, hub, json_data, get_by_id_fx) -> None:
         logger.debug("ikea_base_device ctor...")
         self._hass = hass 
@@ -83,10 +90,11 @@ class ikea_base_device:
 
     @property
     def should_poll(self) -> bool:
-        # A device that skips its update never fetches from the hub; all it
-        # knows arrives over the WebSocket, so a poll has nothing to refresh.
-        # The entities of the device take their should_poll from here.
-        return not self._skip_update
+        # Only a device type that asks for it (polls_hub), and never a device
+        # that skips its update: that one never fetches from the hub, so a
+        # poll has nothing to refresh. The entities of the device take their
+        # should_poll from here.
+        return self.polls_hub and not self._skip_update
         
     def add_listener(self, entity : Entity) -> None:
         self._listeners.append(entity)
@@ -523,6 +531,9 @@ class ikea_water_sensor(ikea_base_device_sensor, BinarySensorEntity):
         return self._device.water_leak_detected
          
 class ikea_blinds_device(ikea_base_device):
+    # Still polled: not yet confirmed that every value of a blind arrives
+    # over the WebSocket (#207; no blinds to test with here).
+    polls_hub = True
     BLINDS_STATE_STOPPED = "stopped"
     OPENING = "opening"
     CLOSING = "closing"
@@ -735,6 +746,10 @@ class ikea_blinds_sensor(ikea_base_device_sensor, CoverEntity):
         await self._device.async_stop_cover()
 
 class ikea_vindstyrka_device(ikea_base_device):
+    # Polled for the min/max PM2.5, which only come with a fetch (#40); the
+    # pushed values opt out per entity.
+    polls_hub = True
+
     def __init__(self, hass:core.HomeAssistant, hub:Hub , json_data:EnvironmentSensor) -> None:
         super().__init__(hass, hub, json_data, hub.get_environment_sensor_by_id)
 
@@ -936,6 +951,10 @@ class ikea_controller_device(ikea_base_device, SensorEntity):
         pass
 
 class ikea_starkvind_air_purifier_device(ikea_base_device):
+    # Still polled: not yet confirmed that every value of an air purifier
+    # arrives over the WebSocket (#207).
+    polls_hub = True
+
     def __init__(self, hass, hub, json_data) -> None:
         logger.debug("Air purifer Fan device ctor ...")
         super().__init__(hass, hub, json_data, hub.get_air_purifier_by_id)

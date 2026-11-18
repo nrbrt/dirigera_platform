@@ -92,3 +92,36 @@ def test_environment_sensor_polls_only_what_the_push_does_not_carry(bc):
     # ... min/max PM2.5 only come with a fetch.
     assert bc.ikea_vindstyrka_pm25(env, bc.WhichPM25.MIN).should_poll is True
     assert bc.ikea_vindstyrka_pm25(env, bc.WhichPM25.MAX).should_poll is True
+
+
+# --- #207: polling is off unless a device type asks for it ---------------------
+#
+# Every entity that polls fetches its own device from the hub, every 15-30 s.
+# With many devices that load made the hub unresponsive (#207), while nearly
+# everything already arrives over the WebSocket. So a device type polls only
+# when it says so, with the reason next to it, and a new type does not poll
+# by accident.
+
+def test_a_device_type_does_not_poll_unless_it_says_so(bc):
+    class new_kind(bc.ikea_base_device):
+        def __init__(self, hass, hub, json_data):
+            super().__init__(hass, hub, json_data, None)
+
+    device = _device(bc, new_kind, "new_1")
+    assert device.skip_update is False  # it could fetch ...
+    assert device.should_poll is False  # ... but nobody asked it to poll
+    assert bc.battery_percentage_sensor(device).should_poll is False
+
+
+def test_the_device_types_that_poll(bc):
+    # A change here is a decision about the load on the hub, not a detail.
+    polling = sorted(
+        name for name, cls in vars(bc).items()
+        if isinstance(cls, type) and issubclass(cls, bc.ikea_base_device)
+        and cls.polls_hub
+    )
+    assert polling == [
+        "ikea_blinds_device",
+        "ikea_starkvind_air_purifier_device",
+        "ikea_vindstyrka_device",
+    ]

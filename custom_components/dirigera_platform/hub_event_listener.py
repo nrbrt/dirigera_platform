@@ -1350,9 +1350,11 @@ class hub_event_listener(threading.Thread):
             # it brings the same, and a second one would only queue behind it.
             logger.debug("Safety net skipped: a resync is still going")
             return
-        await self._resync_all_states("safety net")
+        # No prune: while connected a deleted set sends deviceSetDeleted, and
+        # a set the user empties for a while keeps its entity.
+        await self._resync_all_states("safety net", prune_empty_sets=False)
 
-    async def _resync_all_states(self, reason: str = "reconnect"):
+    async def _resync_all_states(self, reason: str = "reconnect", prune_empty_sets: bool = True):
         """Re-pull current state for all devices and apply it like events:
         after a reconnect, so changes missed during the disconnect gap are
         caught up (#39), and as the safety net every SAFETY_NET_INTERVAL, for
@@ -1366,33 +1368,32 @@ class hub_event_listener(threading.Thread):
         A device no event touched gets its whole row."""
         async with self._resync_lock:
             self._membership_live = set()
-            with live_writes() as newer:
-                try:
-                    devices = await self._hass.async_add_executor_job(self._hub.get, "/devices")
-                except Exception as ex:
-                    logger.warning(f"State resync ({reason}) failed to fetch /devices: {ex}")
-                    self._membership_live = None
-                    return
-            if not devices:
-                self._membership_live = None
-                return
-            self._resyncing = True
             try:
-                for device in devices:
-                    self._apply_message({"type": "deviceStateChanged",
-                                         "data": self._without_newer(device, newer)})
-                # Every few minutes for the safety net: not worth an info line.
-                log = logger.info if reason == "reconnect" else logger.debug
-                log(f"State resync ({reason}) applied for {len(devices)} devices")
+                with live_writes() as newer:
+                    try:
+                        devices = await self._hass.async_add_executor_job(self._hub.get, "/devices")
+                    except Exception as ex:
+                        logger.warning(f"State resync ({reason}) failed to fetch /devices: {ex}")
+                        return
+                if not devices:
+                    return
+                self._resyncing = True
+                try:
+                    for device in devices:
+                        self._apply_message({"type": "deviceStateChanged",
+                                             "data": self._without_newer(device, newer)})
+                finally:
+                    self._resyncing = False
             finally:
-                self._resyncing = False
+                # Also when the run is cancelled (unload), which is no Exception.
                 self._membership_live = None
+            # Every few minutes for the safety net: not worth an info line.
+            log = logger.info if reason == "reconnect" else logger.debug
+            log(f"State resync ({reason}) applied for {len(devices)} devices")
             # Queued behind the membership updates of the replay (#76): a set
             # no light is in any more was deleted while we were disconnected.
-            # Not for the safety net: while connected, deviceSetDeleted comes,
-            # and a set the user empties for a while keeps its entity (#207).
             manager = self._device_sets()
-            if manager is not None and reason == "reconnect":
+            if manager is not None and prune_empty_sets:
                 self._schedule(manager.async_prune_empty_sets)
 
     # What says which device a row is; never left out of it.

@@ -126,3 +126,19 @@ def test_a_run_logs_at_debug_and_a_reconnect_at_info(make, caplog):
     applied = [(r.levelname, r.getMessage()) for r in caplog.records if "applied for" in r.getMessage()]
     assert applied == [("DEBUG", "State resync (safety net) applied for 1 devices"),
                        ("INFO", "State resync (reconnect) applied for 1 devices")]
+
+
+def test_a_cancelled_run_leaves_no_resync_state_behind(make):
+    # Unload cancels the run as a background task of the entry; CancelledError
+    # is no Exception, so the old reset in "except Exception" missed it.
+    make, run = make
+    listener, applied = make(FakeHub([ROW]))
+
+    async def cancelled(func, *args):
+        raise asyncio.CancelledError
+    listener._hass.async_add_executor_job = cancelled
+    with pytest.raises(asyncio.CancelledError):
+        run(listener.run_safety_net())
+    assert listener._membership_live is None
+    assert listener._resyncing is False
+    assert not listener._resync_lock.locked()

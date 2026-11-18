@@ -7,9 +7,10 @@ Assistant still polled every companion entity of such a device each 30 s,
 except the three outlet sensors that carried their own `_attr_should_poll =
 False` (#40). The rule now lives in the shared base classes.
 
-Devices that do fetch (environment sensors, blinds, air purifiers) keep being
-polled, and a class can still opt out with `_attr_should_poll = False`, which
-the pushed environment values do.
+Since #207 a device type polls only when it sets polls_hub; skip_update no
+longer decides it. The types that set it (environment sensors, blinds, air
+purifiers) are pinned below, and a class can still opt out per entity with
+`_attr_should_poll = False`, which the pushed environment values do.
 """
 from types import SimpleNamespace
 

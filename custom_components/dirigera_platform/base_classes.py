@@ -82,6 +82,10 @@ class ikea_base_device:
 
     @property
     def skip_update(self)->bool:
+        # True for a device that never fetches itself from the hub: all it
+        # knows arrives over the WebSocket, and async_update (also when asked
+        # for with homeassistant.update_entity) returns at once. Whether Home
+        # Assistant polls is polls_hub.
         return self._skip_update
     
     @skip_update.setter
@@ -90,11 +94,9 @@ class ikea_base_device:
 
     @property
     def should_poll(self) -> bool:
-        # Only a device type that asks for it (polls_hub), and never a device
-        # that skips its update: that one never fetches from the hub, so a
-        # poll has nothing to refresh. The entities of the device take their
-        # should_poll from here.
-        return self.polls_hub and not self._skip_update
+        # Only a device type that asks for it. The entities of the device
+        # take their should_poll from here.
+        return self.polls_hub
         
     def add_listener(self, entity : Entity) -> None:
         self._listeners.append(entity)

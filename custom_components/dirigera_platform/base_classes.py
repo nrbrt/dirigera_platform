@@ -359,9 +359,9 @@ class ikea_base_device_sensor():
 
     @property
     def should_poll(self) -> bool:
-        # Polled only when the device has something to fetch. A class whose
-        # value arrives by push although its device does fetch (environment
-        # sensors) opts out with _attr_should_poll = False.
+        # Polled only when the device type polls (polls_hub). A class whose
+        # value arrives by push can also opt out itself with
+        # _attr_should_poll = False.
         return self._attr_should_poll and self._device.should_poll
 
     @property
@@ -533,9 +533,10 @@ class ikea_water_sensor(ikea_base_device_sensor, BinarySensorEntity):
         return self._device.water_leak_detected
          
 class ikea_blinds_device(ikea_base_device):
-    # Still polled: not yet confirmed that every value of a blind arrives
-    # over the WebSocket (#207; no blinds to test with here).
-    polls_hub = True
+    # Not polled (#207): the reporter of #207 ran 89 blinds without polling
+    # and their state stayed right; not measured here, as there are no blinds
+    # to test with. The safety net (hub_event_listener.SAFETY_NET_INTERVAL)
+    # catches what an event misses.
     BLINDS_STATE_STOPPED = "stopped"
     OPENING = "opening"
     CLOSING = "closing"
@@ -775,9 +776,13 @@ class ikea_blinds_sensor(ikea_base_device_sensor, CoverEntity):
         await self._device.async_stop_cover()
 
 class ikea_vindstyrka_device(ikea_base_device):
-    # Polled for the min/max PM2.5, which only come with a fetch (#40); the
-    # pushed values opt out per entity.
-    polls_hub = True
+    # Not polled (#207). Measured 18-11-2026 on an ALPSTUGA (Matter): about
+    # one event every 30 s with currentTemperature, currentRH, currentCO2,
+    # and currentPM25 when it changed. maxMeasuredPM25 and minMeasuredPM25
+    # never came in an event; on the hub they are the fixed range of the
+    # sensor (1000 and 0), so the fetch at setup has them. A VINDSTYRKA
+    # (same deviceType) is NOT measured: the safety net
+    # (hub_event_listener.SAFETY_NET_INTERVAL) covers it.
 
     def __init__(self, hass:core.HomeAssistant, hub:Hub , json_data:EnvironmentSensor) -> None:
         super().__init__(hass, hub, json_data, hub.get_environment_sensor_by_id)
@@ -834,14 +839,10 @@ class WhichPM25(Enum):
     MAX = 2
 
 class ikea_vindstyrka_pm25(ikea_base_device_sensor, SensorEntity):
-    # #40: only CURRENT PM2.5 rides the WebSocket push (currentPM25 is in the
-    # allowlist); MIN/MAX measured values are refreshed only by the poll fetch,
-    # so they must keep polling. The throttle applies to the pushed CURRENT.
+    # CURRENT PM2.5 is pushed; MIN/MAX are the fixed range of the sensor and
+    # never change (#207, see ikea_vindstyrka_device). None of them is
+    # polled. The throttle applies to the pushed CURRENT.
     _ha_push_throttle_seconds: int = DEFAULT_POWER_PUSH_THROTTLE
-
-    @property
-    def should_poll(self) -> bool:
-        return self._pm25_type != WhichPM25.CURRENT
 
     def __init__(
         self, device: ikea_vindstyrka_device, pm25_type: WhichPM25
@@ -980,8 +981,9 @@ class ikea_controller_device(ikea_base_device, SensorEntity):
         pass
 
 class ikea_starkvind_air_purifier_device(ikea_base_device):
-    # Still polled: not yet confirmed that every value of an air purifier
-    # arrives over the WebSocket (#207).
+    # Still polled: not measured whether every value of an air purifier
+    # arrives over the WebSocket (#207). Its entities share one throttled
+    # fetch (async_update -> _throttled_update), not one each.
     polls_hub = True
 
     def __init__(self, hass, hub, json_data) -> None:

@@ -498,6 +498,11 @@ class hub_event_listener(threading.Thread):
     def _own_registry(self) -> dict:
         return hub_event_listener.device_registry.get(self._hub_key, {})
 
+    def _scene_sync(self):
+        """This entry's SceneSync (scene.py), None without the scene platform."""
+        data = getattr(self._hass, "data", None) or {}
+        return data.get(_DOMAIN, {}).get(self._config_entry_id, {}).get("scenes")
+
     def _device_sets(self):
         """This entry's device set manager (light.py), None without the light platform."""
         data = getattr(self._hass, "data", None) or {}
@@ -1351,9 +1356,22 @@ class hub_event_listener(threading.Thread):
             # it brings the same, and a second one would only queue behind it.
             logger.debug("Safety net skipped: a resync is still going")
             return
-        # No prune: while connected a deleted set sends deviceSetDeleted, and
-        # a set the user empties for a while keeps its entity.
-        await self._resync_all_states("safety net", prune_empty_sets=False)
+        async with self._resync_lock:
+            # No prune: while connected a deleted set sends deviceSetDeleted,
+            # and a set the user empties for a while keeps its entity.
+            await self._resync_devices("safety net", prune_empty_sets=False)
+            # Then the scenes, in the same run and lock. A failure of either
+            # fetch is logged and leaves the other alone.
+            await self._sync_scenes()
+
+    async def _sync_scenes(self) -> None:
+        sync = self._scene_sync()
+        if sync is None:
+            return
+        try:
+            await sync.async_refresh()
+        except Exception as ex:  # pylint: disable=broad-except
+            logger.warning(f"Scene sync (safety net) failed: {ex}")
 
     async def _resync_all_states(self, reason: str = "reconnect", prune_empty_sets: bool = True):
         """Re-pull current state for all devices and apply it like events:
@@ -1368,34 +1386,38 @@ class hub_event_listener(threading.Thread):
         they wrote is left out of the snapshot: it is newer (see live_writes).
         A device no event touched gets its whole row."""
         async with self._resync_lock:
-            self._membership_live = set()
-            try:
-                with live_writes() as newer:
-                    try:
-                        devices = await self._hass.async_add_executor_job(self._hub.get, "/devices")
-                    except Exception as ex:
-                        logger.warning(f"State resync ({reason}) failed to fetch /devices: {ex}")
-                        return
-                if not devices:
-                    return
-                self._resyncing = True
+            await self._resync_devices(reason, prune_empty_sets)
+
+    async def _resync_devices(self, reason: str, prune_empty_sets: bool) -> None:
+        """The resync itself; the caller holds _resync_lock."""
+        self._membership_live = set()
+        try:
+            with live_writes() as newer:
                 try:
-                    for device in devices:
-                        self._apply_message({"type": "deviceStateChanged",
-                                             "data": self._without_newer(device, newer)})
-                finally:
-                    self._resyncing = False
+                    devices = await self._hass.async_add_executor_job(self._hub.get, "/devices")
+                except Exception as ex:
+                    logger.warning(f"State resync ({reason}) failed to fetch /devices: {ex}")
+                    return
+            if not devices:
+                return
+            self._resyncing = True
+            try:
+                for device in devices:
+                    self._apply_message({"type": "deviceStateChanged",
+                                         "data": self._without_newer(device, newer)})
             finally:
-                # Also when the run is cancelled (unload), which is no Exception.
-                self._membership_live = None
-            # Every few minutes for the safety net: not worth an info line.
-            log = logger.info if reason == "reconnect" else logger.debug
-            log(f"State resync ({reason}) applied for {len(devices)} devices")
-            # Queued behind the membership updates of the replay (#76): a set
-            # no light is in any more was deleted while we were disconnected.
-            manager = self._device_sets()
-            if manager is not None and prune_empty_sets:
-                self._schedule(manager.async_prune_empty_sets)
+                self._resyncing = False
+        finally:
+            # Also when the run is cancelled (unload), which is no Exception.
+            self._membership_live = None
+        # Every few minutes for the safety net: not worth an info line.
+        log = logger.info if reason == "reconnect" else logger.debug
+        log(f"State resync ({reason}) applied for {len(devices)} devices")
+        # Queued behind the membership updates of the replay (#76): a set
+        # no light is in any more was deleted while we were disconnected.
+        manager = self._device_sets()
+        if manager is not None and prune_empty_sets:
+            self._schedule(manager.async_prune_empty_sets)
 
     # What says which device a row is; never left out of it.
     _ROW_IDENTITY = frozenset({"id", "type", "deviceType"})

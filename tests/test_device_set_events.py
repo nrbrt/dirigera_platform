@@ -268,6 +268,20 @@ def test_resync_prunes_empty_sets_after_the_replay():
     assert [name for name, _ in spy.calls] == ["async_handle_membership", "async_prune_empty_sets"]
 
 
+def test_the_safety_net_does_not_prune_empty_sets():
+    # #207: the safety net replays /devices every five minutes. Pruning is
+    # for sets deleted while the WebSocket was down; while it is up their
+    # deviceSetDeleted arrives. A set the user empties for a while (moving
+    # lights between sets) keeps its entity until the next reconnect, as
+    # before the safety net, instead of losing it within five minutes.
+    spy = Spy()
+    devices = [{"id": "a", "deviceType": "light", "attributes": {}, "deviceSet": []}]
+    listener = _listener(spy, devices)
+    FakeBulb("a", "kitchen", added=True)
+    asyncio.run(listener.run_safety_net())
+    assert [name for name, _ in spy.calls] == ["async_handle_membership"]
+
+
 
 class _Attributes(BaseModel):
     is_on: bool = False

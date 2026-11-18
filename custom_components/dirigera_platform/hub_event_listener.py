@@ -1378,8 +1378,10 @@ class hub_event_listener(threading.Thread):
                 self._membership_live = None
             # Queued behind the membership updates of the replay (#76): a set
             # no light is in any more was deleted while we were disconnected.
+            # Not for the safety net: while connected, deviceSetDeleted comes,
+            # and a set the user empties for a while keeps its entity (#207).
             manager = self._device_sets()
-            if manager is not None:
+            if manager is not None and reason == "reconnect":
                 self._schedule(manager.async_prune_empty_sets)
 
     # What says which device a row is; never left out of it.

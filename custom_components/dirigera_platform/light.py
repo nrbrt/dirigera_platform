@@ -603,6 +603,10 @@ class ikea_bulb(LightEntity):
             # PATCH call returns.
             nonlocal command
             command = self._pending.begin(updates)
+            # Newer than a resync fetch that is on its way now: its snapshot
+            # must not reach the pending record (kept, then written back when
+            # no echo comes), also when the hub accepts only after it (#207).
+            note_command(self)
 
         try:
             await writer_for(self._hub).patch_device(self._json_data.id, data, started=started)
@@ -612,8 +616,8 @@ class ikea_bulb(LightEntity):
             raise
         for key, value in self._pending.accepted(command).items():
             setattr(self._json_data.attributes, key, value)
-        # Newer than a resync fetch on its way, also once the pending record
-        # above is settled: same rule as ikea_base_device._command (#207).
+        # And newer than a fetch that began while the PATCH was on its way.
+        # Same rule as ikea_base_device._command (#207).
         note_command(self)
         # Write this light's state, and that of the device set that follows
         # it: this change does not pass the listener, whose cascade otherwise

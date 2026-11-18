@@ -10,6 +10,7 @@ its own pending record for the hub's echo).
 """
 from __future__ import annotations
 
+import asyncio
 import threading
 
 import pytest
@@ -96,3 +97,67 @@ async def test_a_light_switched_on_during_a_slow_fetch_stays_on(setup, monkeypat
     assert hass.states.get(entity_id).state == "off"
     await _command_during_fetch(hass, held, listener, "light", entity_id, monkeypatch)
     assert hass.states.get(entity_id).state == "on"
+
+
+@pytest.mark.parametrize("order", ["fetch first", "patch first"])
+async def test_a_light_patch_overlapping_the_fetch_stays_on(
+        hass, fake_hub, captured_listener, monkeypatch, order):
+    # Third review, finding 1 ("fetch first"): the PATCH goes out while the
+    # fetch is on its way and the hub accepts it only after the snapshot was
+    # applied. The light's pending record kept the snapshot's older isOn false
+    # back and, without an echo, wrote it at the end of its window: the light
+    # showed off while it was on. "patch first" is the mirror: the PATCH is
+    # out before the fetch begins and accepted while it is on its way.
+    hub = fake_hub(FIXTURE)
+    next(d for d in hub.devices if d["id"] == LIGHT)["attributes"]["isOn"] = False
+    held = Held(hub)
+    patch_out, patch_release = threading.Event(), threading.Event()
+    real_write = hub.write
+
+    def write(method, route):
+        if held.holding and route.endswith(LIGHT):
+            patch_out.set()
+            assert patch_release.wait(10), "the test never released the PATCH"
+        real_write(method, route)
+    hub.write = write
+    monkeypatch.setattr(pending_command, "ECHO_WINDOW_S", 0.2)
+
+    entry = MockConfigEntry(domain=DOMAIN, title="patch during fetch", data=dict(ENTRY_DATA),
+                            unique_id=HUB_IP)
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    entity_id = _entity_id(hass, entry, "light", LIGHT)
+    listener = captured_listener[0]
+    held.holding = True
+
+    def turn_on():
+        return hass.async_create_task(hass.services.async_call(
+            "light", "turn_on", {"entity_id": entity_id}, blocking=True))
+    try:
+        if order == "fetch first":
+            run = hass.async_create_task(listener.run_safety_net())
+            assert await hass.async_add_executor_job(held.asked.wait, 10)
+            command = turn_on()
+            assert await hass.async_add_executor_job(patch_out.wait, 10)
+            held.release.set()          # the snapshot is applied first ...
+            await run
+            patch_release.set()         # ... then the hub accepts the PATCH
+            await command
+        else:
+            command = turn_on()
+            assert await hass.async_add_executor_job(patch_out.wait, 10)
+            run = hass.async_create_task(listener.run_safety_net())
+            assert await hass.async_add_executor_job(held.asked.wait, 10)
+            patch_release.set()         # accepted while the fetch is out ...
+            await command
+            held.release.set()          # ... then the older snapshot comes
+            await run
+        await asyncio.sleep(0.5)        # past the (shortened) echo window
+        await hass.async_block_till_done()
+        assert hass.states.get(entity_id).state == "on"
+    finally:
+        held.release.set()
+        patch_release.set()
+        assert await hass.config_entries.async_unload(entry.entry_id)
+        await hass.async_block_till_done()

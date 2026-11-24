@@ -6,6 +6,8 @@
 
 A Home Assistant integration for the IKEA Dirigera hub, built on the [dirigera](https://github.com/Leggin/dirigera) Python library (v1.6.0). Originally forked from [sanjoyg/dirigera_platform](https://github.com/sanjoyg/dirigera_platform) and now under **active development**, with a strong focus on reliability : application-level WebSocket keepalive, automatic state re-sync on reconnect, and dynamic device discovery. Alongside broad device support and regular fixes. The most recent work lands in the [changelog](#changelog) below; issues are actively triaged.
 
+**The 0.4 line is in pre-release** on the `v0.4` branch (latest: [v0.4.1b4](https://github.com/nrbrt/dirigera_platform/releases/tag/v0.4.1b4)): fewer polls, a safety net that keeps every entity in line with the hub, remote battery levels and air purifier state pushed live, lights that end on the level you asked for when switched together, and device sets imported as you choose. This page describes the stable release (v0.3.29). To try 0.4, turn on pre-releases for this repository in HACS; what changes is in the [releases](https://github.com/nrbrt/dirigera_platform/releases).
+
 Contributions are welcome, feel free to open [issues](https://github.com/nrbrt/dirigera_platform/issues) or submit pull requests. Device data dumps are especially helpful for adding support for new devices ([how to dump](docs/dump-data.md)).
 
 ## Highlights
@@ -52,7 +54,7 @@ If you arrived here from an open issue on [sanjoyg/dirigera_platform](https://gi
 - [#177](https://github.com/sanjoyg/dirigera_platform/issues/177), *STYRBAR 4 buttons*: the hub reports all four STYRBAR buttons as button 1, so the integration cannot tell them apart. This is a hub limitation.
 - [#194](https://github.com/sanjoyg/dirigera_platform/issues/194), *TIMMERFLOTTE*: the two halves are merged into one device since v0.2.0, with a deterministic primary (name and room) since v0.3.26. Humidity stays at 1% precision: the hub sends `currentRH` as a whole number.
 - [#153](https://github.com/sanjoyg/dirigera_platform/issues/153), *STARKVIND air quality*: the air-quality value is not exposed as an entity yet, and air purifier state is not pushed live.
-- New device support requests (VINDYKSTRA air quality, Matter device coverage, etc.) are out of scope for this fork's reliability focus.
+- New device support requests (Matter device coverage, etc.) are out of scope for this fork's reliability focus.
 
 ## Supported Devices
 

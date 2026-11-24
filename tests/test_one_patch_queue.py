@@ -51,7 +51,8 @@ def _load():
              and n.name in ("brightness_to_hub_level", "hub_value", "light_turn_on_patch")]
     bulb = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "ikea_bulb")
     methods = [n for n in bulb.body if isinstance(n, (ast.AsyncFunctionDef, ast.FunctionDef))
-               and n.name in ("_send", "_repeat_level", "_repeat_done", "async_turn_on", "async_turn_off")]
+               and n.name in ("_send", "_repeat_level", "_repeat_done", "async_turn_on", "async_turn_off",
+                             "async_will_remove_from_hass")]
     ns = {
         "ATTR_BRIGHTNESS": "brightness",
         "ATTR_COLOR_TEMP_KELVIN": "color_temp_kelvin",
@@ -199,14 +200,14 @@ def _bulb(hub):
                                  color_hue=None, color_saturation=None, color_mode="temperature")
     bulb = SimpleNamespace(
         _hub=hub, hass=_Hass(), _pending=pending_command.PendingCommand(), name="bulb-1",
-        _level_seq=0, _level_not_before=0.0,
+        _level_seq=0, _level_not_before=0.0, _level_repeat=None,
         _json_data=SimpleNamespace(id="bulb-1", attributes=attributes,
                                    capabilities=SimpleNamespace(can_receive=DUAL)),
         min_color_temp_kelvin=RANGE[0], max_color_temp_kelvin=RANGE[1],
         async_schedule_update_ha_state=lambda force: None,
     )
     bulb._send = lambda data, updates: NS["_send"](bulb, data, updates)
-    bulb._repeat_level = lambda seq, data, updates: NS["_repeat_level"](bulb, seq, data, updates)
+    bulb._repeat_level = lambda seq, level: NS["_repeat_level"](bulb, seq, level)
     bulb._repeat_done = lambda repeat: NS["_repeat_done"](bulb, repeat)
     return bulb
 
@@ -349,6 +350,22 @@ def test_a_cancelled_caller_does_not_take_the_repeat_with_it(short_wait):
 
     _run(hub, cancelled())
     assert _levels(hub) == [30, 30]
+
+
+def test_a_removed_light_gets_no_repeat(short_wait):
+    hub = _TimedHub()
+    bulb = _bulb(hub)
+
+    async def removed():
+        first = asyncio.ensure_future(NS["async_turn_on"](bulb, brightness=77))
+        await asyncio.sleep(short_wait / 3)
+        first.cancel()  # Home Assistant drops the call with the entity
+        await NS["async_will_remove_from_hass"](bulb)
+        await asyncio.sleep(short_wait * 2)
+
+    _run(hub, removed())
+    assert _levels(hub) == [30]
+    assert bulb._level_repeat is None
 
 
 def test_the_repeat_takes_over_a_part_way_echo():

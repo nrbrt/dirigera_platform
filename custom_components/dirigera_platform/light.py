@@ -384,6 +384,7 @@ class ikea_bulb(LightEntity):
         # still waiting.
         self._level_not_before = 0.0
         self._level_seq = 0
+        self._level_repeat = None  # the task of a repeat, while it runs
 
         # Register the device for updates
         hub_event_listener.register(self._hub.websocket_base_url, self._json_data.id, registry_entry(self))
@@ -596,6 +597,8 @@ class ikea_bulb(LightEntity):
                 target.async_schedule_update_ha_state(False)
 
     async def async_will_remove_from_hass(self):
+        if self._level_repeat is not None:
+            self._level_repeat.cancel()  # no PATCH for a light that is gone
         self._pending.clear()
 
     async def _send(self, data, updates):
@@ -637,22 +640,29 @@ class ikea_bulb(LightEntity):
             if target is not None and getattr(target, "hass", None) is not None and getattr(target, "enabled", True):
                 target.async_schedule_update_ha_state(False)
 
-    async def _repeat_level(self, seq, data, updates):
+    async def _repeat_level(self, seq, level):
         """Send the level once more after the wait, unless a newer level or
-        turn_off came in the meantime (see async_turn_on)."""
+        turn_off came in the meantime (see async_turn_on). A newer level or
+        turn_off whose own PATCH then fails still drops it."""
         delay = self._level_not_before - asyncio.get_running_loop().time()
         if delay > 0:
             await asyncio.sleep(delay)
         if seq != self._level_seq:
-            logger.debug(f"PATCH {self._json_data.id}: level {data} not repeated, a newer level or turn_off came")
+            logger.debug(f"PATCH {self._json_data.id}: level {level} not repeated, a newer level or turn_off came")
             return
-        await self._send(data, updates)
+        await self._send([{"attributes": {"lightLevel": level}}], {"light_level": level})
 
     def _repeat_done(self, repeat):
-        # Retrieves a failure also when the caller stopped waiting; a caller
-        # that still waits gets it as well, through the shield.
-        if not repeat.cancelled() and repeat.exception() is not None:
-            logger.debug(f"level repeat for {self._json_data.id} failed: {repeat.exception()}")
+        # Retrieves a failure also when the caller stopped waiting (it would
+        # be logged as never retrieved otherwise). A caller that still waits
+        # gets it as well, through the shield, and logs it again.
+        if self._level_repeat is repeat:
+            self._level_repeat = None
+        if repeat.cancelled():
+            return
+        error = repeat.exception()
+        if error is not None:
+            logger.warning(f"level repeat for {self._json_data.id} failed, the bulb may be part-way: {error}")
 
     async def async_turn_on(self, **kwargs):
         logger.debug("light turn_on...")
@@ -682,7 +692,8 @@ class ikea_bulb(LightEntity):
             # temperature right after) does not leave the bulb part-way.
             # A caller that is cancelled (a script in mode: restart) does not
             # take the repeat with it.
-            # Known: with more than ~9 bulbs in the writer, the echo window
+            # Known: with about ten bulbs or more in the writer (~0.25 s per
+            # PATCH), the echo window
             # of the on-PATCH (2 s) can end before the repeat goes out, and
             # Home Assistant then shows the part-way level the hub reports
             # until the repeat is accepted. The bulb is at that level then.
@@ -692,17 +703,16 @@ class ikea_bulb(LightEntity):
             if "light_level" in updates:
                 self._level_seq += 1
                 if from_off or loop.time() < self._level_not_before:
-                    level_again = ([{"attributes": {"lightLevel": updates["light_level"]}}],
-                                   {"light_level": updates["light_level"]})
+                    level_again = updates["light_level"]
             seq = self._level_seq
-            logger.debug(f"PATCH {self._json_data.id}: {data}" + (", level again after the wait" if level_again else ""))
+            logger.debug(f"PATCH {self._json_data.id}: {data}" + (", level again after the wait" if level_again is not None else ""))
             await self._send(data, updates)
             if from_off:
                 # Counted from the end of the on-PATCH, which may have waited
                 # in the hub's writer behind other bulbs (~0.25 s on its own).
                 self._level_not_before = loop.time() + LEVEL_AFTER_ON_S
             if level_again is not None:
-                repeat = asyncio.ensure_future(self._repeat_level(seq, *level_again))
+                repeat = self._level_repeat = asyncio.ensure_future(self._repeat_level(seq, level_again))
                 repeat.add_done_callback(self._repeat_done)
                 await asyncio.shield(repeat)
         except Exception as ex:

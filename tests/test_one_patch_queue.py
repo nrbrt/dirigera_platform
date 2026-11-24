@@ -50,8 +50,8 @@ def _load():
     funcs = [n for n in tree.body if isinstance(n, ast.FunctionDef)
              and n.name in ("brightness_to_hub_level", "hub_value", "light_turn_on_patch")]
     bulb = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "ikea_bulb")
-    methods = [n for n in bulb.body if isinstance(n, ast.AsyncFunctionDef)
-               and n.name in ("_send", "async_turn_on", "async_turn_off")]
+    methods = [n for n in bulb.body if isinstance(n, (ast.AsyncFunctionDef, ast.FunctionDef))
+               and n.name in ("_send", "_repeat_level", "_repeat_done", "async_turn_on", "async_turn_off")]
     ns = {
         "ATTR_BRIGHTNESS": "brightness",
         "ATTR_COLOR_TEMP_KELVIN": "color_temp_kelvin",
@@ -199,13 +199,15 @@ def _bulb(hub):
                                  color_hue=None, color_saturation=None, color_mode="temperature")
     bulb = SimpleNamespace(
         _hub=hub, hass=_Hass(), _pending=pending_command.PendingCommand(), name="bulb-1",
-        _command_seq=0, _level_not_before=0.0,
+        _level_seq=0, _level_not_before=0.0,
         _json_data=SimpleNamespace(id="bulb-1", attributes=attributes,
                                    capabilities=SimpleNamespace(can_receive=DUAL)),
         min_color_temp_kelvin=RANGE[0], max_color_temp_kelvin=RANGE[1],
         async_schedule_update_ha_state=lambda force: None,
     )
     bulb._send = lambda data, updates: NS["_send"](bulb, data, updates)
+    bulb._repeat_level = lambda seq, data, updates: NS["_repeat_level"](bulb, seq, data, updates)
+    bulb._repeat_done = lambda repeat: NS["_repeat_done"](bulb, repeat)
     return bulb
 
 
@@ -222,10 +224,12 @@ def _run(hub, command):
     asyncio.run(main())
 
 
-def test_turn_on_from_off_sends_the_level_in_a_second_patch_and_updates_the_model(short_wait):
-    """From off the bulb takes a lightLevel only once it is on (live hub,
-    16-11-2026: in the same PATCH it ended part-way, 3 of 3; ~1 s later it
-    was right, 3 of 3). Colour goes with isOn, the level after."""
+def test_turn_on_from_off_sends_the_level_with_isOn_and_again_after(short_wait):
+    """From off some bulbs take a lightLevel only once they are on (TRADFRI,
+    live hub 16-11 and 24-11-2026: with isOn it ended part-way; ~1 s later it
+    was right). Others take it at once (guaifi's KAJPLATS, #71), and held
+    back they showed their previous level until it came. So the level goes
+    with isOn, and once more after the wait."""
     hub = _Hub()
     bulb = _bulb(hub)
     assert bulb._json_data.attributes.is_on is False
@@ -234,6 +238,7 @@ def test_turn_on_from_off_sends_the_level_in_a_second_patch_and_updates_the_mode
         ("/devices/bulb-1", [
             {"attributes": {"isOn": True}},
             {"attributes": {"colorHue": 120.0, "colorSaturation": 0.8}},
+            {"attributes": {"lightLevel": 45}},
         ]),
         ("/devices/bulb-1", [{"attributes": {"lightLevel": 45}}]),
     ]
@@ -247,7 +252,7 @@ def test_turn_on_from_off_sends_the_level_in_a_second_patch_and_updates_the_mode
 
 @pytest.fixture
 def short_wait():
-    """The wait before a level, shortened; restored after the test."""
+    """The wait before a level is repeated, shortened; restored after the test."""
     saved = NS["LEVEL_AFTER_ON_S"]
     NS["LEVEL_AFTER_ON_S"] = 0.2
     yield 0.2
@@ -269,8 +274,8 @@ def _levels(hub):
             if "lightLevel" in item["attributes"]]
 
 
-def test_the_level_waits_after_the_on_patch(short_wait):
-    # Without the wait the level ends part-way (0.45 s: 0 of 3 right).
+def test_the_repeated_level_waits_after_the_on_patch(short_wait):
+    # Sooner the level ends part-way (0.45 s: 0 of 3 right).
     hub = _TimedHub()
     bulb = _bulb(hub)
     _run(hub, NS["async_turn_on"](bulb, brightness=115))
@@ -281,7 +286,8 @@ def test_the_level_waits_after_the_on_patch(short_wait):
 def test_a_newer_level_wins_over_one_still_waiting(short_wait):
     """Review 16-11-2026: turn_on(77) from off and turn_on(255) 0.3 s later
     sent 100 and then the older 30, which the bulb ended on. The newer
-    command also waits while the bulb is coming on."""
+    command is repeated as well while the bulb is coming on, and the older
+    repeat is dropped."""
     hub = _TimedHub()
     bulb = _bulb(hub)
 
@@ -292,7 +298,7 @@ def test_a_newer_level_wins_over_one_still_waiting(short_wait):
         await first
 
     _run(hub, both())
-    assert _levels(hub) == [100]
+    assert _levels(hub) == [30, 100, 100]
     assert bulb._json_data.attributes.light_level == 100
 
 
@@ -307,9 +313,57 @@ def test_turn_off_drops_a_level_still_waiting(short_wait):
         await first
 
     _run(hub, on_then_off())
-    assert _levels(hub) == []
+    assert _levels(hub) == [30]  # in the on-PATCH; the repeat is dropped
     assert hub.sent[-1] == ("/devices/bulb-1", [{"attributes": {"isOn": False}}])
     assert bulb._json_data.attributes.is_on is False
+
+
+def test_a_command_without_a_level_keeps_the_repeat(short_wait):
+    """Review 24-11-2026: a colour temperature right after turn_on(77) from off
+    dropped the repeat, and a TRADFRI stayed part-way. Only a newer level or
+    turn_off drops it."""
+    hub = _TimedHub()
+    bulb = _bulb(hub)
+
+    async def level_then_colour():
+        first = asyncio.ensure_future(NS["async_turn_on"](bulb, brightness=77))
+        await asyncio.sleep(short_wait / 3)
+        await NS["async_turn_on"](bulb, color_temp_kelvin=3000)
+        await first
+
+    _run(hub, level_then_colour())
+    assert _levels(hub) == [30, 30]
+    assert hub.sent[-1] == ("/devices/bulb-1", [{"attributes": {"lightLevel": 30}}])
+
+
+def test_a_cancelled_caller_does_not_take_the_repeat_with_it(short_wait):
+    """A script in mode: restart cancels the turn_on while the repeat waits."""
+    hub = _TimedHub()
+    bulb = _bulb(hub)
+
+    async def cancelled():
+        first = asyncio.ensure_future(NS["async_turn_on"](bulb, brightness=77))
+        await asyncio.sleep(short_wait / 3)
+        first.cancel()
+        await asyncio.sleep(short_wait * 2)
+
+    _run(hub, cancelled())
+    assert _levels(hub) == [30, 30]
+
+
+def test_the_repeat_takes_over_a_part_way_echo():
+    """TRADFRI from off: the hub reports the part-way level (69) while the
+    on-PATCH waits for its echo. The repeat takes over the attribute, so the
+    69 is forgotten instead of applied, and the repeat's echo ends the wait."""
+    pending = pending_command.PendingCommand()
+    first = pending.begin({"is_on": True, "light_level": 30})
+    pending.accepted(first)
+    assert pending.holds_back("light_level", 69) is True
+    repeat = pending.begin({"light_level": 30})
+    assert pending.failed(first) == {}  # nothing kept for the level any more
+    pending.accepted(repeat)
+    assert pending.holds_back("light_level", 30) is False  # the confirmation
+    assert not pending.holds_back("light_level", 55)  # a remote after it
 
 
 def test_turn_on_while_on_is_one_patch():

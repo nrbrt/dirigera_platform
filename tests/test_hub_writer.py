@@ -469,7 +469,7 @@ def test_every_device_kind_writes_through_the_one_worker_of_its_hub():
     scene.hass = hass
     bulb = SimpleNamespace(
         _hub=finder, hass=hass, name="bulb-1", _pending=pending_command.PendingCommand(),
-        _command_seq=0, _level_not_before=0.0,
+        _level_seq=0, _level_not_before=0.0,
         _json_data=SimpleNamespace(id="bulb-1", attributes=SimpleNamespace(is_on=True)),
         async_schedule_update_ha_state=lambda force: None,
     )

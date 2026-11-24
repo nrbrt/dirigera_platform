@@ -38,8 +38,14 @@ from .hub_event_listener import (
 from .hub_writer import writer_for
 from .pending_command import PendingCommand
 
-# Seconds after the on-PATCH of a bulb that was off before a lightLevel is
-# sent (live hub 16-11-2026, TRADFRI: 0.75 s and later right 3 of 3).
+# From off, some bulbs take a lightLevel only once they are on. TRADFRI (live
+# hub): with the level in the on-PATCH it ends part-way (asked 30, got 50 on
+# E14 CWS 1.0.x, 16-11 and 24-11-2026; got 69 on E27 WS 3.0.23, 24-11-2026),
+# and sent right after the hub reports the bulb on (~0.34 s) as well. Sent
+# again later, measured from the start of the on-PATCH: 0.45 s 0 of 3 right,
+# 0.60 s 2 of 3, 0.75 s and 1.0 s 3 of 3. guaifi's KAJPLATS (fw 1.2.0, #71)
+# end right with the level in the on-PATCH.
+# Seconds after the end of the on-PATCH before the level is sent once more:
 LEVEL_AFTER_ON_S = 0.8
 
 logger = logging.getLogger("custom_components.dirigera_platform")
@@ -372,11 +378,12 @@ class ikea_bulb(LightEntity):
         self._json_data = json_data
         # What this bulb was last told and the hub has not confirmed yet.
         self._pending = PendingCommand(self._call_later, self._hub_values_stand)
-        # A level for a bulb that was just turned on waits (see async_turn_on):
-        # the loop time before which a lightLevel is not sent, and a counter
-        # so a newer command drops a level that is still waiting.
+        # The level for a bulb that was just turned on is sent once more (see
+        # async_turn_on): the loop time before which that repeat is not sent,
+        # and a counter so a newer level, or turn_off, drops a repeat that is
+        # still waiting.
         self._level_not_before = 0.0
-        self._command_seq = 0
+        self._level_seq = 0
 
         # Register the device for updates
         hub_event_listener.register(self._hub.websocket_base_url, self._json_data.id, registry_entry(self))
@@ -630,6 +637,23 @@ class ikea_bulb(LightEntity):
             if target is not None and getattr(target, "hass", None) is not None and getattr(target, "enabled", True):
                 target.async_schedule_update_ha_state(False)
 
+    async def _repeat_level(self, seq, data, updates):
+        """Send the level once more after the wait, unless a newer level or
+        turn_off came in the meantime (see async_turn_on)."""
+        delay = self._level_not_before - asyncio.get_running_loop().time()
+        if delay > 0:
+            await asyncio.sleep(delay)
+        if seq != self._level_seq:
+            logger.debug(f"PATCH {self._json_data.id}: level {data} not repeated, a newer level or turn_off came")
+            return
+        await self._send(data, updates)
+
+    def _repeat_done(self, repeat):
+        # Retrieves a failure also when the caller stopped waiting; a caller
+        # that still waits gets it as well, through the shield.
+        if not repeat.cancelled() and repeat.exception() is not None:
+            logger.debug(f"level repeat for {self._json_data.id} failed: {repeat.exception()}")
+
     async def async_turn_on(self, **kwargs):
         logger.debug("light turn_on...")
         logger.debug(kwargs)
@@ -643,41 +667,44 @@ class ikea_bulb(LightEntity):
                 kwargs,
                 (self.min_color_temp_kelvin, self.max_color_temp_kelvin),
             )
-            # A bulb that is off takes a lightLevel only once it is on. Sent
-            # straight after isOn (same PATCH, or right after the hub reports
-            # the bulb on, ~0.34 s), the level ends part-way: asked 30, got
-            # 50, 3 of 3 runs and 6 of 6 after the on-event (live hub,
-            # 16-11-2026, TRADFRI). Measured from the start of the on-PATCH:
-            # 0.45 s 0 of 3 right, 0.60 s 2 of 3, 0.75 s and 1.0 s 3 of 3.
-            # So from off the level goes in a second PATCH, ~1 s after the
-            # first. The wait is outside the hub's writer: other bulbs are
-            # not held up. Colour from off was right in one PATCH.
-            # A level asked while the bulb is still coming on (a second
-            # command within that second) waits as well, and a newer command
-            # (on or off) drops a level that is still waiting, so an older
-            # level never lands after a newer one (review 16-11-2026).
-            self._command_seq += 1
-            seq = self._command_seq
+            # From off the level goes in the on-PATCH, and once more
+            # LEVEL_AFTER_ON_S after it (see there): right at once on a bulb
+            # that takes it, right in the end on one that does not. Held back
+            # until the repeat instead, a bulb that takes it showed its
+            # previous level meanwhile: the repeat waits in the hub's writer
+            # behind the on-PATCHes of every other bulb (2.9 s for 11 bulbs,
+            # #71). The wait itself is outside the writer, so other bulbs are
+            # not held up. A level asked while the bulb is still coming on (a
+            # second command within that time) is repeated as well.
+            # Only a newer level or turn_off drops a repeat that is still
+            # waiting, so an older level never lands after a newer one
+            # (review 16-11-2026), and a command without a level (a colour
+            # temperature right after) does not leave the bulb part-way.
+            # A caller that is cancelled (a script in mode: restart) does not
+            # take the repeat with it.
+            # Known: with more than ~9 bulbs in the writer, the echo window
+            # of the on-PATCH (2 s) can end before the repeat goes out, and
+            # Home Assistant then shows the part-way level the hub reports
+            # until the repeat is accepted. The bulb is at that level then.
             loop = asyncio.get_running_loop()
             from_off = not self._json_data.attributes.is_on
-            level_after = None
-            if len(data) > 1 and "lightLevel" in data[-1]["attributes"] \
-                    and (from_off or loop.time() < self._level_not_before):
-                level_after = ([data.pop()], {"light_level": updates.pop("light_level")})
-            logger.debug(f"PATCH {self._json_data.id}: {data}" + (f" then {level_after[0]}" if level_after else ""))
+            level_again = None
+            if "light_level" in updates:
+                self._level_seq += 1
+                if from_off or loop.time() < self._level_not_before:
+                    level_again = ([{"attributes": {"lightLevel": updates["light_level"]}}],
+                                   {"light_level": updates["light_level"]})
+            seq = self._level_seq
+            logger.debug(f"PATCH {self._json_data.id}: {data}" + (", level again after the wait" if level_again else ""))
             await self._send(data, updates)
             if from_off:
                 # Counted from the end of the on-PATCH, which may have waited
                 # in the hub's writer behind other bulbs (~0.25 s on its own).
                 self._level_not_before = loop.time() + LEVEL_AFTER_ON_S
-            if level_after is not None:
-                delay = self._level_not_before - loop.time()
-                if delay > 0:
-                    await asyncio.sleep(delay)
-                if seq != self._command_seq:
-                    logger.debug(f"PATCH {self._json_data.id}: level {level_after[0]} dropped, a newer command came")
-                    return
-                await self._send(*level_after)
+            if level_again is not None:
+                repeat = asyncio.ensure_future(self._repeat_level(seq, *level_again))
+                repeat.add_done_callback(self._repeat_done)
+                await asyncio.shield(repeat)
         except Exception as ex:
             logger.error("error encountered turning on : {}".format(self.name))
             logger.error(ex)
@@ -685,7 +712,7 @@ class ikea_bulb(LightEntity):
 
     async def async_turn_off(self, **kwargs):
         logger.debug("light turn_off...")
-        self._command_seq += 1  # a level still waiting from a turn_on is dropped
+        self._level_seq += 1  # a level repeat still waiting from a turn_on is dropped
         try:
             await self._send([{"attributes": {"isOn": False}}], {"is_on": False})
         except Exception as ex:

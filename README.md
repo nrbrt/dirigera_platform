@@ -23,7 +23,7 @@ Contributions are welcome, feel free to open [issues](https://github.com/nrbrt/d
 
 ## Upstream issues addressed in this fork
 
-If you arrived here from an open issue on [sanjoyg/dirigera_platform](https://github.com/sanjoyg/dirigera_platform/issues), the fix may already be in this fork. Switching to this repository in HACS should resolve the listed issues without further action.
+If you arrived here from an open issue on [sanjoyg/dirigera_platform](https://github.com/sanjoyg/dirigera_platform/issues), the fix may already be in this fork. Switching to this repository in the Marketplace (Home Assistant 2026.11 or newer) or in HACS (older versions) should resolve the listed issues without further action. On Home Assistant 2026.11 or newer, see [Update or switch fails](#update-or-switch-fails-on-home-assistant-202611-or-newer) first.
 
 | Upstream issue | Title | Fixed in |
 |----------------|-------|----------|
@@ -80,28 +80,36 @@ If you arrived here from an open issue on [sanjoyg/dirigera_platform](https://gi
 
 - Tested on Home Assistant 2026.1 and newer (v0.2.6 and earlier work with HA 2024.12+)
 - IKEA Dirigera hub on your local network
-- HACS installed
+- Home Assistant 2026.11 or newer: nothing extra, the built-in Marketplace installs it
+- Older versions: HACS installed
 
 ## Installation
 
-### Via HACS (recommended)
-
 [![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=nrbrt&repository=dirigera_platform&category=integration)
 
-Or manually:
-1. In Home Assistant, go to **HACS** → **Integrations** → **⋮** (top right) → **Custom repositories**
+The button was made for HACS; Home Assistant says it opens the repository in the Marketplace too. If it doesn't, add the repository by hand:
+
+### Via the Marketplace (Home Assistant 2026.11 or newer)
+
+1. Go to **Settings** → **Marketplace** → **Add from link** (top right)
+2. Enter `https://github.com/nrbrt/dirigera_platform` and select **Add**. The Marketplace asks you to connect GitHub first if you haven't yet; it needs that for repositories outside its catalog
+3. Open **IKEA Dirigera Hub Integration** in the list and select **Install**
+
+### Via HACS (Home Assistant 2026.10 or older)
+
+1. Go to **HACS** → **Integrations** → **⋮** (top right) → **Custom repositories**
 2. Add `https://github.com/nrbrt/dirigera_platform` as an **Integration**
 3. Search for "Dirigera" and install
 
-### Update fails on Home Assistant 2026.11 or newer
+### Update or switch fails on Home Assistant 2026.11 or newer
 
-If an update stops with *"The update could not be started: The dirigera_platform directory belongs to sanjoyg/dirigera_platform"*, the Marketplace (which replaced HACS in Home Assistant 2026.11) still has the original `sanjoyg/dirigera_platform` marked as installed next to this fork. This happens when you switched from the original to this fork under HACS. It is a known Home Assistant bug ([home-assistant/core#193096](https://github.com/home-assistant/core/issues/193096)), with a fix under review in [home-assistant/core#193106](https://github.com/home-assistant/core/pull/193106).
+If an update or install stops with *"The update could not be started: The dirigera_platform directory belongs to sanjoyg/dirigera_platform"*, the Marketplace (which replaced HACS in Home Assistant 2026.11) still has the original `sanjoyg/dirigera_platform` marked as installed next to this fork. This happens when you switched from the original to this fork under HACS, or when you switch now while the original is still installed. It is a known Home Assistant bug ([home-assistant/core#193096](https://github.com/home-assistant/core/issues/193096)), with a fix under review in [home-assistant/core#193106](https://github.com/home-assistant/core/pull/193106).
 
 Until that fix is released:
 1. Go to **Settings** → **Devices & Services**, open the **Marketplace** integration and **disable** it.
 2. Make a copy of `/config/.storage/marketplace.repositories`.
 3. In that file, find the block with `"full_name": "sanjoyg/dirigera_platform"` and remove only its `"installed": true` line. Leave the `nrbrt/dirigera_platform` block alone.
-4. Save, enable the Marketplace again and retry the update.
+4. Save, enable the Marketplace again and retry the update or install.
 
 Do **not** uninstall the sanjoyg entry from the Marketplace ("Delete and uninstall"): that removes your Dirigera setup together with all its devices and entities. See [#78](https://github.com/nrbrt/dirigera_platform/issues/78).
 

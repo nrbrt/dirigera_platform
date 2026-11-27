@@ -78,12 +78,28 @@ def _run_store(**attrs):
 
 
 def test_store_keeps_exclude_matter():
-    data = _run_store(ip="10.0.0.2", hide_device_set_bulbs=True, exclude_matter=True)
+    data = _run_store(ip="10.0.0.2", device_set_mode="sets_only", exclude_matter=True)
     assert data.get(CONST.CONF_EXCLUDE_MATTER) is True
 
 
 def test_store_writes_the_same_keys_as_pairing():
-    data = _run_store(ip="10.0.0.2", hide_device_set_bulbs=True, exclude_matter=False)
+    data = _run_store(ip="10.0.0.2", device_set_mode="sets_only", exclude_matter=False)
     expected = {getattr(CONST, k, None) or {"CONF_IP_ADDRESS": "ip_address", "CONF_TOKEN": "token"}[k]
                 for k in _keys_written_by_pairing_path()}
     assert set(data) == expected
+
+
+# --- The device set mode option ---------------------------------------------
+
+
+def test_store_keeps_the_device_set_mode():
+    data = _run_store(ip="10.0.0.2", device_set_mode="lights_only")
+    assert data.get(CONST.CONF_DEVICE_SET_MODE) == "lights_only"
+
+
+def test_both_paths_write_the_device_set_mode_and_drop_the_checkbox():
+    assert "CONF_DEVICE_SET_MODE" in _keys_written_by_pairing_path()
+    assert "CONF_HIDE_DEVICE_SET_BULBS" not in _keys_written_by_pairing_path()
+    data = _run_store(ip="10.0.0.2", device_set_mode="sets_only")
+    assert "hide_device_set_bulbs" not in data
+

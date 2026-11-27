@@ -2,7 +2,7 @@ import logging
 from enum import Enum
 
 from .dirigera_lib_patch import HubX
-from .scene import ikea_scene
+from .scene import ikea_scene, is_integration_scene
 from .light import ikea_bulb
 from .base_classes import (
     ikea_blinds_device,
@@ -45,6 +45,8 @@ class ikea_gateway:
 
     async def make_devices(self, hass, ip, token, exclude_matter: bool = False):
         hub: HubX = HubX(token, ip, exclude_matter=exclude_matter)
+        # Kept for the scenes, which the safety net fetches again (#207).
+        self.hub = hub
 
         # issue #38 punt 1+4: coalesce de ~10 /devices-fetches van de get_X-calls hieronder
         # tot één enkele fetch. try/finally garandeert dat de cache-vlag áltijd reset —
@@ -57,7 +59,7 @@ class ikea_gateway:
             empty_scenes = []
             non_empty_scenes = []
             for scene in scenes:
-                if scene.name.startswith("dirigera_integration_empty_scene_"):
+                if is_integration_scene(scene):
                     empty_scenes.append(ikea_scene(hub,scene))
                 else:
                     non_empty_scenes.append(ikea_scene(hub,scene))

@@ -9,14 +9,14 @@
   ],
   "config_flow": true,
   "documentation": "https://github.com/nrbrt/dirigera_platform",
-  "iot_class": "local_polling",
+  "iot_class": "local_push",
   "issue_tracker": "https://github.com/nrbrt/dirigera_platform/issues",
   "loggers": [
     "custom_components.dirigera_platform"
   ],
   "requirements": [
-    "dirigera==1.6.0",
+    "dirigera==1.6.1",
     "python-dateutil>=2.8"
   ],
-  "version": "0.3.29"
+  "version": "0.4.1"
 }

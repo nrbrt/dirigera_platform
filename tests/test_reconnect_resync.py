@@ -7,8 +7,8 @@ the listener only waits for new events -- it never re-pulls current device state
 reload fixes it temporarily because a reload re-fetches all states; this makes
 that happen automatically on every reconnect.
 
-Approach: on a *reconnect* open (not the first), fetch /devices once and replay
-each device through the existing on_message() update path, with discovery
+Approach: on a *reconnect* open (not the first), fetch /devices once and apply
+each device through the existing event path (_apply_message), with discovery
 suppressed so unknown devices don't trigger a discovery storm on every reconnect.
 
 hub_event_listener.py is loaded standalone (not via the package __init__, which
@@ -17,7 +17,6 @@ real listener logic runs unchanged.
 """
 import asyncio
 import importlib.util
-import json
 import os
 import sys
 import types
@@ -89,7 +88,7 @@ def _make(devices=None):
     return hub_event_listener(FakeHub(devices), FakeHass())
 
 
-def test_resync_fetches_devices_once_and_replays_each_through_on_message():
+def test_resync_fetches_devices_once_and_applies_each_like_an_event():
     devices = [
         {"id": "light-a_1", "deviceType": "light", "attributes": {"isOn": True}},
         {"id": "plug-b_1", "deviceType": "outlet", "attributes": {"isOn": False}},
@@ -98,14 +97,14 @@ def test_resync_fetches_devices_once_and_replays_each_through_on_message():
     listener = _make(devices)
 
     seen = []
-    # spy on_message; also capture whether discovery is suppressed *during* the call
-    listener.on_message = lambda ws, msg: seen.append((json.loads(msg), listener._resyncing))
+    # spy on the event path; also capture whether discovery is suppressed *during* the call
+    listener._apply_message = lambda msg: seen.append((msg, listener._resyncing))
 
     asyncio.run(listener._resync_all_states())
 
     # exactly one /devices fetch (no per-device hammering)
     assert listener._hub.get_calls == ["/devices"]
-    # every device replayed as a deviceStateChanged through on_message
+    # every device applied as a deviceStateChanged through the event path
     assert len(seen) == 3
     assert [m["data"]["id"] for m, _ in seen] == ["light-a_1", "plug-b_1", "door-c_1"]
     assert all(m["type"] == "deviceStateChanged" for m, _ in seen)

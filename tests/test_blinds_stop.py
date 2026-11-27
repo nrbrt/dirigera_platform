@@ -8,13 +8,14 @@ and stop a blind.
 
 What is guarded here:
 
-1. The stop request: right route and payload, run in the executor, refused with
+1. The stop request: right route and payload, sent by the hub's writer, refused with
    a HomeAssistantError when the blind does not list blindsState in canReceive.
 2. The STOP feature: advertised only for blinds that can actually be stopped.
-3. The state after a stop. Push events only refresh blindsCurrentLevel, so a
-   stop halfway through a move leaves current != target in the cache. Without
-   the stop_requested override is_closing / is_opening would report a movement
-   that no longer happens.
+3. The state after a stop. A stop halfway through a move leaves current !=
+   target in the cache, and the blind may coast a little after it: a level
+   report then must not count as a movement again (stop_requested). Which way
+   a blind moves comes from its level reports since #207, see
+   test_blinds_direction.py.
 
 As in test_light_color_mode.py, the classes under test are lifted out of
 base_classes.py with ast, so the real bodies run without homeassistant.
@@ -72,10 +73,29 @@ class _StubDevice:
     def name(self):
         return "Test blind"
 
+    def async_schedule_update_ha_state(self, force_refresh=False):
+        pass
+
+    async def async_update(self):
+        # The fetch itself; a test swaps in the fetched model beforehand.
+        pass
+
+
+class _Writer:
+    """Stands in for the hub's writer (test_hub_writer.py): runs it at once."""
+
+    async def run(self, func, *args, started=None):
+        if started is not None:
+            started()
+        return func(*args)
+
 
 class _StubSensor:
     def __init__(self, device, **kwargs):
         self._device = device
+
+    async def async_will_remove_from_hass(self):
+        pass
 
 
 def _load_classes():
@@ -85,6 +105,7 @@ def _load_classes():
     nodes = [n for n in tree.body if isinstance(n, ast.ClassDef) and n.name in wanted]
     assert {n.name for n in nodes} == wanted
     namespace = {
+        "asyncio": asyncio,
         "core": SimpleNamespace(HomeAssistant=object),
         "Hub": object,
         "Blind": object,
@@ -96,9 +117,17 @@ def _load_classes():
         "ikea_base_device": _StubDevice,
         "ikea_base_device_sensor": _StubSensor,
         "logger": SimpleNamespace(debug=lambda *a, **k: None),
+        "writer_for": lambda hub: _Writer(),
+        # What a command wrote is noted for a resync fetch on its way
+        # (test_command_writes_state.py tests that); nothing is fetching here.
+        "note_command": lambda entity: None,
     }
-    module = ast.Module(body=nodes, type_ignores=[])
+    # The real command path of the base device, on the stub.
+    base = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "ikea_base_device")
+    command = next(n for n in base.body if getattr(n, "name", None) == "_command")
+    module = ast.Module(body=[command] + nodes, type_ignores=[])
     exec(compile(ast.fix_missing_locations(module), BASE_CLASSES, "exec"), namespace)
+    _StubDevice._command = namespace["_command"]
     return namespace["ikea_blinds_device"], namespace["ikea_blinds_sensor"]
 
 
@@ -108,6 +137,11 @@ Device, Sensor = _load_classes()
 class FakeHass:
     async def async_add_executor_job(self, func, *args):
         return func(*args)
+
+    @property
+    def loop(self):
+        # Home Assistant's loop: here the one asyncio.run started.
+        return asyncio.get_running_loop()
 
 
 class FakeClient:
@@ -160,6 +194,14 @@ def make_entity(blind):
     return device, Sensor(device)
 
 
+def moving(device, blind, level):
+    """The hub reports a new current level (#207: the direction comes from it).
+
+    Must run on an event loop: the device starts its wait for the next report."""
+    blind.attributes.blinds_current_level = level
+    device.async_schedule_update_ha_state(False)
+
+
 def run(coro):
     return asyncio.run(coro)
 
@@ -195,8 +237,12 @@ def test_failed_stop_request_propagates_and_leaves_state_alone():
     blind = make_blind(client=FakeClient(fail=True))
     device, entity = make_entity(blind)
 
-    with pytest.raises(RuntimeError):
-        run(entity.async_stop_cover())
+    async def go():
+        moving(device, blind, 62)
+        with pytest.raises(RuntimeError):
+            await entity.async_stop_cover()
+
+    run(go())
 
     assert device.stop_requested is False
     assert blind.attributes.blinds_state == "down"
@@ -223,7 +269,13 @@ def test_stop_feature_hidden_when_blind_does_not_support_it():
 # --- 3. state after a stop ---------------------------------------------------
 
 def test_control_without_stop_a_moving_blind_reports_closing():
-    _, entity = make_entity(make_blind())
+    blind = make_blind(current=58)
+    device, entity = make_entity(blind)
+
+    async def go():
+        moving(device, blind, 60)
+
+    run(go())
     assert entity.current_cover_position == 40
     assert entity.target_cover_position == 0
     assert entity.is_closing is True
@@ -232,9 +284,14 @@ def test_control_without_stop_a_moving_blind_reports_closing():
 
 def test_stopped_closing_blind_no_longer_reports_closing():
     blind = make_blind()  # closing, target still 100 in the cache after the stop
-    _, entity = make_entity(blind)
+    device, entity = make_entity(blind)
 
-    run(entity.async_stop_cover())
+    async def go():
+        moving(device, blind, 62)
+        assert entity.is_closing is True
+        await entity.async_stop_cover()
+
+    run(go())
 
     assert entity.is_closing is False
     assert entity.is_opening is False
@@ -242,11 +299,15 @@ def test_stopped_closing_blind_no_longer_reports_closing():
 
 def test_stopped_opening_blind_no_longer_reports_opening():
     # opening: heading for 0 (fully open), currently 30 closed -> HA position 70
-    blind = make_blind(current=30, target=0, state="up")
-    _, entity = make_entity(blind)
-    assert entity.is_opening is True
+    blind = make_blind(current=32, target=0, state="up")
+    device, entity = make_entity(blind)
 
-    run(entity.async_stop_cover())
+    async def go():
+        moving(device, blind, 30)
+        assert entity.is_opening is True
+        await entity.async_stop_cover()
+
+    run(go())
 
     assert entity.is_opening is False
     assert entity.is_closing is False
@@ -297,10 +358,17 @@ def test_new_target_from_the_hub_clears_the_stop():
     # e.g. the blind is moved again from the IKEA app or a remote
     blind = make_blind()
     device, entity = make_entity(blind)
-    run(entity.async_stop_cover())
-    assert entity.is_closing is False
 
-    blind.attributes.blinds_target_level = 0  # now opening
+    async def go():
+        moving(device, blind, 62)
+        await entity.async_stop_cover()
+        assert entity.is_closing is False
+
+        # the hub's event carries the new target
+        blind.attributes.blinds_target_level = 0  # now opening
+        device.async_schedule_update_ha_state(False)
+
+    run(go())
 
     assert device.stop_requested is False
     assert entity.is_opening is True

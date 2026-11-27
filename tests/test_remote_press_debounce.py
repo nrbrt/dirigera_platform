@@ -26,7 +26,7 @@ L = hel.hub_event_listener
 @pytest.fixture
 def listener():
     fired = []
-    bus = SimpleNamespace(fire=lambda event_type, event_data: fired.append(event_data["type"]))
+    bus = SimpleNamespace(async_fire=lambda event_type, event_data: fired.append(event_data["type"]))
     entity = SimpleNamespace(registry_entry=SimpleNamespace(device_id="dev1", entity_id="sensor.bilresa"))
     saved = L.device_registry
     L.device_registry = {"hk": {"abc_1": hel.registry_entry(entity)}}
@@ -34,6 +34,9 @@ def listener():
     hel.remotes_with_press_events.clear()
     me = object.__new__(L)
     me._hub_key = "hk"
+    me._request_to_stop = False
+    # The hand-off to the event loop, run inline.
+    me._loop = SimpleNamespace(call_soon_threadsafe=lambda f, *args: f(*args))
     me._hass = SimpleNamespace(bus=bus)
     me._apply_scene_actions = lambda msg: None
     yield me, fired
@@ -95,7 +98,7 @@ def two_remotes(listener):
     me, fired = listener
     other = SimpleNamespace(registry_entry=SimpleNamespace(device_id="dev2", entity_id="sensor.other"))
     L.device_registry["hk"]["xyz_1"] = hel.registry_entry(other)
-    bus = SimpleNamespace(fire=lambda event_type, event_data: fired.append(
+    bus = SimpleNamespace(async_fire=lambda event_type, event_data: fired.append(
         (event_data["device_id"], event_data["type"])))
     me._hass = SimpleNamespace(bus=bus)
     return me, fired
@@ -148,13 +151,27 @@ def test_next_press_after_a_second_fires_again(two_remotes):
     assert fired == [("dev1", "button1_single_click"), ("dev1", "button1_single_click")]
 
 
-def test_scene_actions_still_applied_on_a_debounced_update(two_remotes):
+def test_scene_actions_applied_once_the_scene_ran(two_remotes):
+    # The first sceneUpdated still carries the previous lastTriggered, the
+    # second one is current: only the second describes what just ran. It is
+    # also the debounced one, so actions must not depend on the press firing.
+    me, fired = two_remotes
+    applied = []
+    me._apply_scene_actions = lambda msg: applied.append(json.loads(msg) if isinstance(msg, str) else msg)
+    t0 = datetime.datetime.now(datetime.timezone.utc)
+    _press_once(me, t0, t0 - datetime.timedelta(minutes=4), include_press=False)
+    assert len(applied) == 1
+    assert applied[0]["data"]["lastTriggered"] == _ts(t0 + datetime.timedelta(milliseconds=79))
+
+
+def test_scene_actions_not_applied_when_the_scene_was_only_edited(two_remotes):
     me, fired = two_remotes
     applied = []
     me._apply_scene_actions = lambda msg: applied.append(msg)
     t0 = datetime.datetime.now(datetime.timezone.utc)
-    _press_once(me, t0, t0 - datetime.timedelta(minutes=4), include_press=False)
-    assert len(applied) == 2
+    L.on_message(me, None, json.dumps({"type": "sceneUpdated", "time": _ts(t0), "data": {
+        "lastTriggered": _ts(t0 - datetime.timedelta(hours=2)), "triggers": [{"type": "app"}]}}))
+    assert applied == []
 
 
 def test_map_never_moves_back_in_time(two_remotes):

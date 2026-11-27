@@ -1,0 +1,37 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+# Read-only token: the tests need nothing else, also not for a pull request from a fork.
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install
+        # The same versions as manifest.json requires.
+        run: pip install pytest==8.3.5 dirigera==1.6.1 python-dateutil
+      - name: Run
+        run: python -m pytest -q tests
+
+  pintest:
+    name: Pintest (real Home Assistant)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the test image
+        run: docker build -t dirigera-pintest tests_ha
+      - name: Run
+        run: >-
+          docker run --rm -v "$PWD":/repo -u "$(id -u):$(id -g)" -e HOME=/tmp
+          dirigera-pintest -c tests_ha/pytest.ini tests_ha

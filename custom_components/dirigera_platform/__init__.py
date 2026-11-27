@@ -1,7 +1,9 @@
 """Platform for IKEA dirigera hub integration."""
 from __future__ import annotations
 
+import json
 import logging
+from datetime import timedelta
 
 from dirigera import Hub 
 from .dirigera_lib_patch import HubX
@@ -16,23 +18,37 @@ from homeassistant.components.light import PLATFORM_SCHEMA
 from homeassistant.const import CONF_IP_ADDRESS, CONF_TOKEN, Platform
 
 # Import the device class from the component that you want to support
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 import homeassistant.helpers.config_validation as cv
 from homeassistant.helpers import device_registry as dr, entity_registry as er
+from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.storage import Store
 
 from .const import (
     DOMAIN,
-    CONF_HIDE_DEVICE_SET_BULBS,
     CONF_ENABLED_PLATFORMS,
     DEFAULT_ENABLED_PLATFORMS,
     CONF_EXCLUDE_MATTER,
+    DEVICE_SET_MODEL,
     DEFAULT_EXCLUDE_MATTER,
     PLATFORM,
     DISCOVERY_COORDINATOR,
+    ROOMS_STORE_VERSION,
+    rooms_store_key,
 )
-from .hub_event_listener import hub_event_listener
-from .stale_devices import async_remove_stale_devices, is_stale, known_identifiers
+from .hub_event_listener import SAFETY_NET_INTERVAL, hub_event_listener
+from .hub_writer import start_hub_writer
+from .stale_devices import (
+    async_remove_stale_devices,
+    excluded_matter_identifiers,
+    find_excluded_matter_devices,
+    is_stale,
+    known_identifiers,
+)
+from .dirigera_lib_patch import is_matter_device
+from .anonymise import anonymise_devices
 from .device_discovery import DeviceDiscoveryCoordinator, set_discovery_coordinator
+from .device_sets import DeviceSetIndex, resolve_device_set_mode, sets_wanted
 
 PLATFORMS_TO_SETUP = [  Platform.SWITCH, 
                         Platform.BINARY_SENSOR, 
@@ -56,7 +72,7 @@ def resolve_platforms(entry_data: dict) -> list[Platform]:
 logger = logging.getLogger("custom_components.dirigera_platform")
 
 
-def sync_platform_entity_registry(hass, entry, platforms) -> None:
+def sync_platform_entity_registry(hass, entry, platforms, hidden_unique_ids=frozenset()) -> None:
     """Hide the entities of platforms this entry no longer sets up (#47).
 
     Not forwarding a platform does not remove its entities. They stay in the
@@ -75,14 +91,27 @@ def sync_platform_entity_registry(hass, entry, platforms) -> None:
     off by hand keeps disabled_by USER and stays off, even when its platform is
     selected again. Entries are only written when the desired state differs, so
     a setup that changes nothing fires no registry events at all.
+
+    hidden_unique_ids are entities left out within a selected platform: the
+    lights the device set mode does not import. They are handled here,
+    in the same pass, rather than by the light platform: both filters use
+    disabled_by INTEGRATION, and two passes would undo each other on every
+    start (this one re-enabling what the other disabled, which also makes
+    Home Assistant reload the entry).
     """
     registry = er.async_get(hass)
-    wanted = {platform.value for platform in platforms}
+    domains = {platform.value for platform in platforms}
+
+    def wanted(reg_entry) -> bool:
+        if reg_entry.domain not in domains:
+            return False
+        return reg_entry.domain != "light" or reg_entry.unique_id not in hidden_unique_ids
+
     disabled = 0
     re_enabled = 0
 
     for reg_entry in er.async_entries_for_config_entry(registry, entry.entry_id):
-        selected = reg_entry.domain in wanted
+        selected = wanted(reg_entry)
         if not selected and reg_entry.disabled_by is None:
             registry.async_update_entity(
                 reg_entry.entity_id,
@@ -97,14 +126,36 @@ def sync_platform_entity_registry(hass, entry, platforms) -> None:
 
     if disabled or re_enabled or dev_disabled or dev_re_enabled:
         logger.info(
-            "Platform filter: disabled %d entities, re-enabled %d; "
+            "Platform and device set filter: disabled %d entities, re-enabled %d; "
             "disabled %d devices, re-enabled %d",
             disabled, re_enabled, dev_disabled, dev_re_enabled,
         )
 
 
+def _device_set_entity_ids(hass, entry) -> set:
+    """Unique ids of this entry's device set entities.
+
+    Found by their device's model rather than the device set index, so that
+    "Lights only" also hides a set that disappeared while Home Assistant was
+    stopped: no light is in it any more, so the index does not know it.
+    """
+    entity_reg = er.async_get(hass)
+    return {
+        reg_entry.unique_id
+        for device in dr.async_entries_for_config_entry(dr.async_get(hass), entry.entry_id)
+        if device.model == DEVICE_SET_MODEL
+        for reg_entry in er.async_entries_for_device(entity_reg, device.id, include_disabled_entities=True)
+        if reg_entry.domain == "light"
+    }
+
+
 def _sync_device_registry(hass, entry, entity_reg, wanted) -> tuple[int, int]:
     """Hide devices whose every entity belongs to a platform we no longer import.
+
+    wanted is the predicate of sync_platform_entity_registry: an entity is
+    kept when its platform is selected and the device set mode imports it.
+    A light inside a set is a device with one light entity, so under "Sets
+    only" the device goes too, as in the IKEA app.
 
     Disabling the entities alone was not enough, and that is what #47 actually
     asked for. Home Assistant keeps a device in the device registry as long as it
@@ -134,7 +185,7 @@ def _sync_device_registry(hass, entry, entity_reg, wanted) -> tuple[int, int]:
         if not entities:
             # No entities at all: nothing to base a decision on, so leave it be.
             continue
-        keep = any(e.domain in wanted for e in entities)
+        keep = any(wanted(e) for e in entities)
         if not keep and device.disabled_by is None:
             device_reg.async_update_device(
                 device.id, disabled_by=dr.DeviceEntryDisabler.INTEGRATION
@@ -151,7 +202,6 @@ PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
     {
         vol.Required(CONF_IP_ADDRESS): cv.string,
         vol.Required(CONF_TOKEN): cv.string,
-        vol.Optional(CONF_HIDE_DEVICE_SET_BULBS, default=True): cv.boolean
     }
 )
 
@@ -181,99 +231,15 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
         token = config_data[CONF_TOKEN]
         
         logger.info("--------------")
-        if ip == "mock":
-            logger.info("{ MOCK JSON }")
-        else:
-            hub = dirigera.Hub(token, ip)
-            json_resp = hub.get("/devices")
-            logger.debug(f"TYPE IS {type(json_resp)}")
-            #import json 
-            #devices_json = json.loads(json_resp)
-            # Sanitize the dump
-                    
-            master_id_map = {}
-            id_counter = 1
-            for device_json in json_resp:
-                if "id" in device_json:
-                    id_value = device_json["id"]
-                    id_to_replace = id_counter 
-                    
-                    if id_value in master_id_map:
-                        id_to_replace = master_id_map[id_value]
-                    else:
-                        id_counter = id_counter + 1
-                        master_id_map[id_value] = id_to_replace
-                    
-                    device_json["id"] = id_to_replace
-                    
-                if "relationId" in device_json:
-                    id_value = device_json["relationId"]
-                    id_to_replace = id_counter
-
-                    if id_value in master_id_map:
-                        id_to_replace = master_id_map[id_value]
-                    else:
-                        id_counter = id_counter + 1
-                        master_id_map[id_value] = id_to_replace
-
-                    # used to overwrite "id" again, leaving relationId unsanitized
-                    device_json["relationId"] = id_to_replace
-                
-                if "attributes" in device_json and "serialNumber" in device_json["attributes"]:
-                    id_value = device_json["attributes"]["serialNumber"]
-                    id_to_replace = id_counter 
-                    
-                    if id_value in master_id_map:
-                        id_to_replace = master_id_map[id_value]
-                    else:
-                        id_counter = id_counter + 1
-                        master_id_map[id_value] = id_to_replace
-                    
-                    device_json["attributes"]["serialNumber"] = id_to_replace
-                
-                if "room" in device_json and "id" in device_json["room"]:
-                    id_value = device_json["room"]["id"]
-                    id_to_replace = id_counter 
-                    
-                    if id_value in master_id_map:
-                        id_to_replace = master_id_map[id_value]
-                    else:
-                        id_counter = id_counter + 1
-                        master_id_map[id_value] = id_to_replace
-                    
-                    device_json["room"]["id"] = id_to_replace
-                
-                if "deviceSet" in device_json:
-                    for device_set in device_json["deviceSet"]:
-                        if "id" in device_set:
-                            id_value = device_set["id"]
-                            id_to_replace = id_counter 
-                            
-                            if id_value in master_id_map:
-                                id_to_replace = master_id_map[id_value]
-                            else:
-                                id_counter = id_counter + 1
-                                master_id_map[id_value] = id_to_replace
-                            
-                            device_set["id"]= id_to_replace
-                
-                # remoteLinks is a list of device-id strings. The old code
-                # tested for the literal "remote_link" (never true), would
-                # KeyError when the key was absent, and read a stale loop
-                # variable from the deviceSet block above.
-                if "remoteLinks" in device_json and device_json["remoteLinks"]:
-                    sanitized_links = []
-                    for remote_link in device_json["remoteLinks"]:
-                        if remote_link in master_id_map:
-                            id_to_replace = master_id_map[remote_link]
-                        else:
-                            id_to_replace = id_counter
-                            id_counter = id_counter + 1
-                            master_id_map[remote_link] = id_to_replace
-                        sanitized_links.append(id_to_replace)
-                    device_json["remoteLinks"] = sanitized_links
-                
-            logger.info(json_resp)
+        hub = dirigera.Hub(token, ip)
+        json_resp = hub.get("/devices")
+        # Same anonymiser as the diagnostics download: one place decides what
+        # leaves the house. The old inline sanitiser here left device and room
+        # names, the hub's coordinates and its serial number in the dump.
+        json_resp = anonymise_devices(
+            [d for d in json_resp if isinstance(d, dict)]
+        )
+        logger.info(json.dumps(json_resp, indent=2))
         logger.info("--------------")
 
 
@@ -289,17 +255,6 @@ async def async_setup_entry(
     
     hass.data.setdefault(DOMAIN, {})
     hass_data = dict(entry.data)
-
-    # for backward compatibility
-    hide_device_set_bulbs : bool = True 
-    if CONF_HIDE_DEVICE_SET_BULBS in hass_data:
-         logger.debug("Found HIDE_DEVICE_SET *****  ")
-         #logger.debug(hass_data)
-         hide_device_set_bulbs = hass_data[CONF_HIDE_DEVICE_SET_BULBS]
-    else:
-        logger.debug("Not found HIDE_DEVICE_SET *****  ")
-        # If its not with HASS update it
-        hass_data[CONF_HIDE_DEVICE_SET_BULBS] = hide_device_set_bulbs
 
     ip = hass_data[CONF_IP_ADDRESS]
     # issue #39: back-fill unique_id on entries created before the duplicate
@@ -319,7 +274,11 @@ async def async_setup_entry(
         hass_data[CONF_IP_ADDRESS],
         exclude_matter=hass_data.get(CONF_EXCLUDE_MATTER, DEFAULT_EXCLUDE_MATTER),
     )
-    
+
+    # The one write path to this hub (hub_writer.py). Its worker lives as long
+    # as the entry, through Home Assistant's shutdown too.
+    start_hub_writer(hass, entry, hub)
+
     # Lets get all kinds that we are interested in one go and create the devices
     # such that the platform can go ahead and add the associated sensors
     platform = ikea_gateway()
@@ -340,6 +299,14 @@ async def async_setup_entry(
             f"Cannot connect to IKEA Dirigera hub at {hass_data[CONF_IP_ADDRESS]}: {err}"
         ) from err
     
+    # #75: with "Skip Matter devices" on, the devices this integration
+    # imported for Matter devices before are left behind. Remove them, but
+    # only those the hub still marks as Matter (the same test the filter
+    # uses), so the match is certain; a device that is gone from the hub is
+    # the stale-device check's business, which only logs.
+    if hass_data.get(CONF_EXCLUDE_MATTER, DEFAULT_EXCLUDE_MATTER):
+        await _async_remove_excluded_matter_devices(hass, entry, hass_data)
+
     #await hass.async_add_executor_job(platform.make_devices,hass, hass_data[CONF_IP_ADDRESS], hass_data[CONF_TOKEN])
 
     # Initialize the discovery coordinator BEFORE platform setup
@@ -362,37 +329,62 @@ async def async_setup_entry(
     # have its entities re-enabled first, otherwise the platform sets up while
     # the registry still lists them as disabled and they stay missing until the
     # next reload.
-    sync_platform_entity_registry(hass, entry, platforms)
+    # The lights the device set mode leaves out. The light platform sets
+    # up from the same index, so both agree on what is hidden.
+    device_set_index = DeviceSetIndex.from_lights(platform.lights)
+    hass.data[DOMAIN][entry.entry_id]["device_set_index"] = device_set_index
+    device_set_mode = resolve_device_set_mode(hass_data)
+    hidden_lights = device_set_index.hidden_unique_ids(device_set_mode)
+    if not sets_wanted(device_set_mode):
+        hidden_lights |= _device_set_entity_ids(hass, entry)
+    sync_platform_entity_registry(hass, entry, platforms, hidden_lights)
+    # The devices that exist before the platforms set up, for the area sync:
+    # it tells new devices from known ones (see sync_all_device_areas).
+    devices_before_setup = frozenset(
+        device.id for device in dr.async_entries_for_config_entry(dr.async_get(hass), entry.entry_id))
     await hass.config_entries.async_forward_entry_setups(entry, platforms)
 
     # Now lets start the event listener
     hub_basic = Hub(hass_data[CONF_TOKEN], hass_data[CONF_IP_ADDRESS])
 
-    if hass_data[CONF_IP_ADDRESS] != "mock":
-        hub_events = hub_event_listener(hub_basic, hass, discovery, entry.entry_id)
-        hub_events.start()
-        try:
-            # Sync device names and areas from Dirigera to HA device registry
-            # This ensures names and areas are set correctly after HA restart
-            await hub_events.sync_all_device_names()
-            await hub_events.sync_all_device_areas()
-        except Exception:
-            # Setup is about to fail — without this, the listener thread kept
-            # running and every ConfigEntryNotReady retry started another one.
-            await hass.async_add_executor_job(hub_events.stop)
-            raise
-        # Per-entry storage instead of a module global: a second hub entry no
-        # longer clobbers the first listener, and unload stops the right one.
-        hass.data[DOMAIN][entry.entry_id]["hub_events"] = hub_events
-
-        # Catches devices that left the hub while Home Assistant was stopped;
-        # deviceRemoved events cover the ones that go while it runs. In the
-        # background, so setup does not wait for a second /devices fetch.
+    hub_events = hub_event_listener(
+        hub_basic, hass, discovery, entry.entry_id,
+        rooms_store=Store(hass, ROOMS_STORE_VERSION, rooms_store_key(entry.entry_id)),
+    )
+    hub_events.start()
+    try:
+        # Bring renames and room moves made in the IKEA app while Home
+        # Assistant was stopped into the device registry. Neither touches what
+        # the user set in Home Assistant (#72 and its area follow-up).
+        await hub_events.sync_all_device_names()
+        await hub_events.sync_all_device_areas(devices_before_setup)
+    except Exception:
+        # Setup is about to fail — without this, the listener thread kept
+        # running and every ConfigEntryNotReady retry started another one.
+        await hass.async_add_executor_job(hub_events.stop)
+        raise
+    # Per-entry storage instead of a module global: a second hub entry no
+    # longer clobbers the first listener, and unload stops the right one.
+    hass.data[DOMAIN][entry.entry_id]["hub_events"] = hub_events
+    # One GET /devices every few minutes instead of polling entities (#207).
+    # Home Assistant's own interval: unload cancels it, and the run is a
+    # background task of the entry, which unload and stopping cancel too.
+    @callback
+    def safety_net(_now) -> None:
         entry.async_create_background_task(
-            hass,
-            async_remove_stale_devices(hass, entry.entry_id, hub_basic),
-            "dirigera_platform stale device check",
-        )
+            hass, hub_events.run_safety_net(), "dirigera_platform safety net")
+
+    entry.async_on_unload(async_track_time_interval(
+        hass, safety_net, timedelta(seconds=SAFETY_NET_INTERVAL)))
+
+    # Catches devices that left the hub while Home Assistant was stopped;
+    # deviceRemoved events cover the ones that go while it runs. In the
+    # background, so setup does not wait for a second /devices fetch.
+    entry.async_create_background_task(
+        hass,
+        async_remove_stale_devices(hass, entry.entry_id, hub_basic),
+        "dirigera_platform stale device check",
+    )
 
     logger.debug("Complete async_setup_entry...")
 
@@ -455,13 +447,18 @@ async def async_remove_config_entry_device(
     config_entry: config_entries.ConfigEntry,
     device_entry: config_entries.DeviceEntry,
 ) -> bool:
-    """Let the user delete a device only when the hub no longer has it.
+    """Let the user delete a device only when we no longer create it: the hub
+    no longer has it, or the Matter filter keeps it out (#75).
 
-    A device that is still on the hub comes back on the next start, so deleting
+    A device that is still created comes back on the next start, so deleting
     it would only look like it worked. When the hub cannot be asked, keep it.
     """
     data = config_entry.data
-    hub = Hub(data[CONF_TOKEN], data[CONF_IP_ADDRESS])
+    # With "Skip Matter devices" on, a Matter device on the hub is one we no
+    # longer create, so the user may delete it (#75). The plain Hub listed it
+    # as known and the delete was refused.
+    hub = HubX(data[CONF_TOKEN], data[CONF_IP_ADDRESS],
+               exclude_matter=data.get(CONF_EXCLUDE_MATTER, DEFAULT_EXCLUDE_MATTER))
     try:
         known = known_identifiers(await hass.async_add_executor_job(hub.get, "/devices"))
     except Exception as ex:
@@ -471,3 +468,41 @@ async def async_remove_config_entry_device(
         logger.warning("Cannot check the hub before removing a device: no device list")
         return False
     return is_stale(device_entry, known)
+
+
+async def _async_remove_excluded_matter_devices(hass, entry, hass_data) -> list[str]:
+    """Remove our devices that stand for hub devices the Matter filter keeps
+    out (#75). Their entities go with them; a device of Home Assistant's own
+    Matter integration is another device and is not touched."""
+    try:
+        raw = await hass.async_add_executor_job(
+            Hub(hass_data[CONF_TOKEN], hass_data[CONF_IP_ADDRESS]).get, "/devices")
+    except Exception as ex:
+        logger.warning("Skip Matter devices: cannot read the hub, nothing removed: %s", ex)
+        return []
+    excluded = excluded_matter_identifiers(raw, is_matter_device)
+    if not excluded:
+        return []
+    device_reg = dr.async_get(hass)
+    entity_reg = er.async_get(hass)
+    removed = []
+    for device in find_excluded_matter_devices(
+            dr.async_entries_for_config_entry(device_reg, entry.entry_id), excluded):
+        # Enough in the log to see afterwards what went, should a user report
+        # a device that should have stayed.
+        entities = [e.entity_id for e in er.async_entries_for_device(
+            entity_reg, device.id, include_disabled_entities=True)]
+        logger.warning(
+            "Skip Matter devices is on: removing %s (hub id %s, entities %s), which the hub "
+            "marks as a Matter device and this integration no longer imports (#75)",
+            device.name_by_user or device.name,
+            ", ".join(sorted(i for d, i in device.identifiers if d == DOMAIN)),
+            ", ".join(entities) or "none")
+        device_reg.async_update_device(device.id, remove_config_entry_id=entry.entry_id)
+        removed.append(device.id)
+    return removed
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: config_entries.ConfigEntry) -> None:
+    """Delete what this entry stored outside the registries: the rooms last seen on its hub."""
+    await Store(hass, ROOMS_STORE_VERSION, rooms_store_key(entry.entry_id)).async_remove()

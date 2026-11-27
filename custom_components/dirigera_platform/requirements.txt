@@ -1,1 +1,1 @@
-dirigera==1.6.0
+dirigera==1.6.1

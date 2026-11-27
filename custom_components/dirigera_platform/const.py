@@ -1,7 +1,33 @@
 DOMAIN = "dirigera_platform"
 PLATFORM = "dirigera_platform"
-CONF_HIDE_DEVICE_SET_BULBS = "hide_device_set_bulbs"
 DISCOVERY_COORDINATOR = "discovery_coordinator"
+
+# How lights that belong to an IKEA device set are imported.
+#
+#   sets_only        one light entity per set; its lights are not imported on
+#                    their own. Matches what the IKEA app shows.
+#   sets_and_lights  the set, plus each light in it as its own entity.
+#   lights_only      no set entities; every light is imported on its own.
+#
+# Lights that are in no set are imported with every choice.
+CONF_DEVICE_SET_MODE = "device_set_mode"
+DEVICE_SET_MODE_SETS_ONLY = "sets_only"
+DEVICE_SET_MODE_SETS_AND_LIGHTS = "sets_and_lights"
+DEVICE_SET_MODE_LIGHTS_ONLY = "lights_only"
+DEFAULT_DEVICE_SET_MODE = DEVICE_SET_MODE_SETS_ONLY
+LEGACY_DEVICE_SET_MODE = DEVICE_SET_MODE_SETS_AND_LIGHTS
+
+# The model a device set's device carries, which tells set entities apart
+# from light entities in the registries.
+DEVICE_SET_MODEL = "Device Set"
+
+# The choices in the order the config flow shows them. Their labels are in
+# strings.json under selector.device_set_mode.
+DEVICE_SET_MODES = (
+    DEVICE_SET_MODE_SETS_ONLY,
+    DEVICE_SET_MODE_SETS_AND_LIGHTS,
+    DEVICE_SET_MODE_LIGHTS_ONLY,
+)
 
 # Minimum interval (seconds) between HA state pushes for high-frequency power
 # sensors (current amps/active power/voltage). The hub pushes these over the
@@ -82,3 +108,12 @@ PLATFORM_LABELS = {
     "fan": "Air purifiers",
     "scene": "Scenes",
 }
+
+# The id of the hub room each device was last seen in, per config entry, so a restart
+# only moves a device whose room changed on the hub (see
+# hub_event_listener.sync_all_device_areas).
+ROOMS_STORE_VERSION = 1
+
+
+def rooms_store_key(entry_id: str) -> str:
+    return f"{DOMAIN}.{entry_id}.rooms"

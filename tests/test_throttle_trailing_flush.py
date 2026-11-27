@@ -109,12 +109,7 @@ class FakeLoop:
     """Records what the code schedules instead of running a real event loop."""
 
     def __init__(self):
-        self.threadsafe_calls = []
         self.later_calls = []
-
-    def call_soon_threadsafe(self, fn, *args):
-        self.threadsafe_calls.append(fn)
-        fn(*args)  # run inline so the test can observe call_later
 
     def call_later(self, delay, fn, *args):
         self.later_calls.append((delay, fn, args))
@@ -135,7 +130,7 @@ class FakeListener:
         self.unique_id = "fake_outlet_power"
         self.writes = 0
 
-    def schedule_update_ha_state(self, force_refresh=False):
+    def async_schedule_update_ha_state(self, force_refresh=False):
         self.writes += 1
 
 
@@ -150,6 +145,16 @@ def test_first_push_is_not_throttled():
     bc = _load_base_classes()
     listener = FakeListener()
     assert bc.ikea_base_device._push_throttled(listener, False) is False
+
+
+def test_first_push_is_not_throttled_shortly_after_boot(monkeypatch):
+    # time.monotonic() counts from boot on Linux; a CI runner can be only
+    # seconds old. The first push must not be throttled there either.
+    bc = _load_base_classes()
+    listener = FakeListener(throttle=60)
+    monkeypatch.setattr(bc.time, "monotonic", lambda: 5.0)
+    assert bc.ikea_base_device._push_throttled(listener, False) is False
+    assert listener.hass.loop.later_calls == []
 
 
 def test_throttled_push_arms_a_trailing_flush():

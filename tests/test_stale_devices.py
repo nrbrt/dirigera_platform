@@ -23,9 +23,13 @@ class _FakeRegistry:
         self.devices = {d.id: d for d in devices}
         self.removed = []
 
-    def async_update_device(self, device_id, remove_config_entry_id=None):
+    def async_update_device(self, device_id, remove_config_entry_id=None, name_by_user=None):
         # Like HA: detach the entry, delete the device once no entry is left.
         device = self.devices[device_id]
+        if name_by_user is not None:
+            device.name_by_user = name_by_user
+        if remove_config_entry_id is None:
+            return
         device.config_entries.discard(remove_config_entry_id)
         if not device.config_entries:
             self.removed.append(device_id)
@@ -39,10 +43,17 @@ _dr.async_get = lambda hass: _registry["current"]
 _dr.async_entries_for_config_entry = lambda reg, entry_id: [
     d for d in reg.devices.values() if entry_id in d.config_entries
 ]
+_entities = {"by_device": {}}
+_er = types.ModuleType("homeassistant.helpers.entity_registry")
+_er.async_get = lambda hass: _entities
+_er.async_entries_for_device = lambda reg, device_id, include_disabled_entities=False: \
+    reg["by_device"].get(device_id, [])
+sys.modules["homeassistant.helpers.entity_registry"] = _er
 _ha = sys.modules.setdefault("homeassistant", types.ModuleType("homeassistant"))
 _helpers = sys.modules.setdefault("homeassistant.helpers", types.ModuleType("homeassistant.helpers"))
 sys.modules["homeassistant.helpers.device_registry"] = _dr
 _helpers.device_registry = _dr
+_helpers.entity_registry = _er
 
 _path = os.path.join(os.path.dirname(__file__), "..", "custom_components",
                      "dirigera_platform", "stale_devices.py")
@@ -51,9 +62,9 @@ sd = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(sd)
 
 
-def _device(dev_id, identifier, entry="e1", name=None):
+def _device(dev_id, identifier, entry="e1", name=None, name_by_user=None):
     return SimpleNamespace(id=dev_id, identifiers={("dirigera_platform", identifier)},
-                           config_entries={entry}, name=name or identifier, name_by_user=None)
+                           config_entries={entry}, name=name or identifier, name_by_user=name_by_user)
 
 
 class _Hass:
@@ -80,14 +91,16 @@ HUB = [
 ]
 
 
-def _run(devices, hub, dry_run):
+def _run(devices, hub, dry_run, entities=None):
     _registry["current"] = _FakeRegistry(devices)
+    _entities["by_device"] = entities or {}
     found = asyncio.run(sd.async_remove_stale_devices(_Hass(), "e1", hub, dry_run=dry_run))
     return found, _registry["current"]
 
 
-def test_known_identifiers_cover_ids_relations_and_device_sets():
-    assert sd.known_identifiers(HUB) == {"bulb_1", "set-a", "rel-t_1", "rel-t", "plug_1", "matter_1"}
+def test_known_identifiers_are_the_ones_we_create():
+    # A half of a split device is known by its relationId only, like the entities.
+    assert sd.known_identifiers(HUB) == {"bulb_1", "set-a", "rel-t", "plug_1", "matter_1"}
 
 
 @pytest.mark.parametrize("raw", [None, [], {"error": "x"}])
@@ -125,7 +138,7 @@ def test_nothing_stale_nothing_removed():
 
 def test_split_device_stays_while_one_half_is_left():
     hub = [{"id": "rel-t_2", "relationId": "rel-t"}]
-    found, reg = _run([_device("d-split", "rel-t"), _device("d-x", "x_1"), _device("d-y", "rel-t_2")],
+    found, reg = _run([_device("d-split", "rel-t"), _device("d-x", "x_1")],
                       _Hub(hub), dry_run=False)
     assert "rel-t" not in found
     assert reg.removed == ["d-x"]
@@ -175,3 +188,211 @@ def test_device_without_our_identifier_is_never_stale():
     foreign = SimpleNamespace(id="d-f", identifiers={("other", "x")}, config_entries={"e1"},
                               name="f", name_by_user=None)
     assert sd.find_stale_devices([foreign], sd.known_identifiers(HUB)) == []
+
+
+# Switching from upstream: it created one device per half of a split device,
+# identified by the half's id. Reported in #68 (TIMMERFLOTTE, BILRESA, GRILLPLATS).
+SPLIT_HUB = [
+    {"id": "t_1", "relationId": "t"}, {"id": "t_2", "relationId": "t"},
+    {"id": "g_1", "relationId": "g"}, {"id": "g_2", "relationId": "g"},
+    {"id": "bulb_1"},
+]
+
+
+def _upstream_leftovers():
+    return [
+        _device("d-t", "t"), _device("d-g", "g"), _device("d-bulb", "bulb_1"),
+        _device("d-t1", "t_1"), _device("d-t2", "t_2"), _device("d-g1", "g_1"),
+    ]
+
+
+def test_upstream_half_devices_are_removed_even_when_more_than_half():
+    found, reg = _run(_upstream_leftovers(), _Hub(SPLIT_HUB), dry_run=False)
+    assert sorted(reg.removed) == ["d-g1", "d-t1", "d-t2"]
+    assert sorted(found) == ["g_1", "t_1", "t_2"]
+
+
+def test_upstream_half_devices_dry_run_removes_nothing():
+    found, reg = _run(_upstream_leftovers(), _Hub(SPLIT_HUB), dry_run=True)
+    assert sorted(found) == ["g_1", "t_1", "t_2"]
+    assert reg.removed == []
+
+
+def test_half_device_name_moves_to_the_relation_device():
+    ours = _upstream_leftovers()
+    ours[3].name_by_user = "Slaapkamer"      # t_1
+    ours[4].name_by_user = "Other half"      # t_2, primary half wins
+    ours[1].name_by_user = "Mine"            # g already named, keep it
+    ours[5].name_by_user = "Plug"            # g_1
+    _, reg = _run(ours, _Hub(SPLIT_HUB), dry_run=False)
+    assert reg.devices["d-t"].name_by_user == "Slaapkamer"
+    assert reg.devices["d-g"].name_by_user == "Mine"
+
+
+def test_half_device_name_not_moved_in_dry_run():
+    ours = _upstream_leftovers()
+    ours[3].name_by_user = "Slaapkamer"
+    _, reg = _run(ours, _Hub(SPLIT_HUB), dry_run=True)
+    assert reg.devices["d-t"].name_by_user is None
+
+
+def test_gone_guard_still_holds_next_to_leftovers():
+    ours = _upstream_leftovers()[:2] + [_device("d-a", "a_1"), _device("d-b", "b_1"),
+                                        _device("d-t1", "t_1")]
+    found, reg = _run(ours, _Hub(SPLIT_HUB), dry_run=False)
+    # a_1 and b_1 are 2 of 5 gone: allowed. Now make the gone ones more than half.
+    assert sorted(reg.removed) == ["d-a", "d-b", "d-t1"]
+    ours = [_device("d-t", "t"), _device("d-a", "a_1"), _device("d-b", "b_1"),
+            _device("d-c", "c_1"), _device("d-t1", "t_1")]
+    found, reg = _run(ours, _Hub(SPLIT_HUB), dry_run=False)
+    assert reg.removed == ["d-t1"]
+
+
+def test_user_may_delete_an_upstream_half_device():
+    known = sd.known_identifiers(SPLIT_HUB)
+    assert sd.is_stale(_device("d-t1", "t_1"), known) is True
+    assert sd.is_stale(_device("d-t", "t"), known) is False
+
+
+def test_device_with_its_own_id_as_relation_id_is_not_superseded():
+    hub = [{"id": "x_1", "relationId": "x_1"}]
+    assert sd.superseded_identifiers(hub) == {}
+    assert sd.known_identifiers(hub) == {"x_1"}
+
+
+def test_half_device_with_entities_left_is_kept():
+    # Entities of a platform that never loads stay on the half device; removing
+    # it would delete them, so it waits until it is empty.
+    found, reg = _run(_upstream_leftovers(), _Hub(SPLIT_HUB), dry_run=False,
+                      entities={"d-t1": ["sensor.slaapkamer_temperature"]})
+    assert sorted(reg.removed) == ["d-g1", "d-t2"]
+    assert "t_1" not in found
+
+
+# --- #75: devices the Matter filter keeps out ------------------------------------
+
+def _is_matter(device):
+    # Same test as dirigera_lib_patch.is_matter_device: the commissioning keys.
+    return any(k in (device.get("attributes") or {}) for k in ("discriminator", "qrCode", "setupCode"))
+
+
+_MATTER = {"discriminator": "", "qrCode": "", "setupCode": ""}
+MATTER_HUB = [
+    {"id": "m1", "attributes": dict(_MATTER)},                                  # Matter bulb
+    {"id": "m2_1", "relationId": "m2", "attributes": dict(_MATTER)},            # Matter split device
+    {"id": "m2_2", "relationId": "m2", "attributes": dict(_MATTER)},
+    {"id": "z1", "attributes": {"customName": "zigbee"}},                       # not Matter
+    {"id": "mix_1", "relationId": "mix", "attributes": dict(_MATTER)},         # one half Matter,
+    {"id": "mix_2", "relationId": "mix", "attributes": {}},                     # the other not
+]
+
+
+def test_only_devices_the_hub_marks_as_matter_are_found():
+    excluded = sd.excluded_matter_identifiers(MATTER_HUB, _is_matter)
+    devices = [_device("d1", "m1"), _device("d2", "m2"), _device("d3", "z1"),
+               _device("d4", "mix"), _device("d5", "set-id")]
+    found = {d.id for d in sd.find_excluded_matter_devices(devices, excluded)}
+    assert found == {"d1", "d2"}
+
+
+def test_a_device_with_one_identifier_outside_the_matter_set_is_kept():
+    excluded = sd.excluded_matter_identifiers(MATTER_HUB, _is_matter)
+    both = SimpleNamespace(id="d6", identifiers={("dirigera_platform", "m1"), ("dirigera_platform", "z1")},
+                           config_entries={"e1"}, name="x", name_by_user=None)
+    assert sd.find_excluded_matter_devices([both], excluded) == []
+
+
+def test_no_usable_hub_list_means_nothing_is_found():
+    assert sd.excluded_matter_identifiers([], _is_matter) is None
+    assert sd.excluded_matter_identifiers(None, _is_matter) is None
+    assert sd.find_excluded_matter_devices([_device("d1", "m1")], set()) == []
+
+
+# --- #75: the wiring in __init__.py (review 16-11-2026) ---------------------------
+# The two functions are lifted out of __init__.py with ast, as in
+# test_platform_filtering.py, with the real HubX filter and is_matter_device
+# from dirigera_lib_patch.py on top of a fake base Hub.
+
+import __future__
+import ast
+import logging
+
+_COMPONENT = os.path.join(os.path.dirname(__file__), "..", "custom_components", "dirigera_platform")
+
+
+def _lift(path, names, ns):
+    with open(path) as fh:
+        source = fh.read()
+    nodes = [n for n in ast.parse(source).body
+             if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and n.name in names]
+    assert {n.name for n in nodes} == set(names), names
+    exec(compile(ast.Module(body=nodes, type_ignores=[]), path, "exec",
+                 flags=__future__.annotations.compiler_flag, dont_inherit=True), ns)
+    return ns
+
+
+class _BaseHub:
+    """Stands in for dirigera.Hub: answers /devices with the hub's raw list."""
+    raw = []
+
+    def __init__(self, token, ip_address, port="8443", api_version="v1"):
+        pass
+
+    def get(self, route):
+        assert route == "/devices"
+        return list(type(self).raw)
+
+
+_LIB = _lift(os.path.join(_COMPONENT, "dirigera_lib_patch.py"), ["is_matter_device", "HubX"],
+             {"Hub": _BaseHub, "MATTER_ATTRIBUTE_KEYS": ("discriminator", "qrCode", "setupCode")})
+_INIT = _lift(os.path.join(_COMPONENT, "__init__.py"),
+              ["async_remove_config_entry_device", "_async_remove_excluded_matter_devices"], {
+                  "Hub": _BaseHub, "HubX": _LIB["HubX"], "is_matter_device": _LIB["is_matter_device"],
+                  "dr": _dr, "er": _er, "DOMAIN": "dirigera_platform",
+                  "CONF_TOKEN": "token", "CONF_IP_ADDRESS": "ip_address",
+                  "CONF_EXCLUDE_MATTER": "exclude_matter", "DEFAULT_EXCLUDE_MATTER": False,
+                  "excluded_matter_identifiers": sd.excluded_matter_identifiers,
+                  "find_excluded_matter_devices": sd.find_excluded_matter_devices,
+                  "known_identifiers": sd.known_identifiers, "is_stale": sd.is_stale,
+                  "logger": logging.getLogger(__name__),
+              })
+
+_DATA = {"token": "t", "ip_address": "hub", "exclude_matter": True}
+
+
+def test_the_real_matter_test_marks_the_same_devices_as_the_test_copy():
+    for device in MATTER_HUB + HUB:
+        assert _LIB["is_matter_device"](device) == _is_matter(device)
+
+
+def test_startup_cleanup_removes_only_the_matter_devices_and_logs_what_went(monkeypatch, caplog):
+    # With the filtering HubX instead of the plain Hub the cleanup would see
+    # no Matter devices and remove nothing.
+    monkeypatch.setattr(_BaseHub, "raw", MATTER_HUB)
+    _registry["current"] = _FakeRegistry([_device("d1", "m1"), _device("d2", "m2"), _device("d3", "z1"),
+                                          _device("d4", "mix"), _device("d5", "set-id")])
+    _entities["by_device"] = {"d1": [SimpleNamespace(entity_id="light.matter_bulb")]}
+    entry = SimpleNamespace(entry_id="e1")
+    with caplog.at_level(logging.WARNING):
+        removed = asyncio.run(_INIT["_async_remove_excluded_matter_devices"](_Hass(), entry, _DATA))
+    assert sorted(removed) == ["d1", "d2"]
+    assert sorted(_registry["current"].removed) == ["d1", "d2"]
+    assert "hub id m1, entities light.matter_bulb" in caplog.text
+
+
+def test_startup_cleanup_removes_nothing_when_the_hub_cannot_be_read(monkeypatch):
+    def broken(self, route):
+        raise OSError("hub unreachable")
+    monkeypatch.setattr(_BaseHub, "get", broken)
+    _registry["current"] = _FakeRegistry([_device("d1", "m1")])
+    removed = asyncio.run(_INIT["_async_remove_excluded_matter_devices"](_Hass(), SimpleNamespace(entry_id="e1"), _DATA))
+    assert removed == [] and _registry["current"].removed == []
+
+
+@pytest.mark.parametrize("option, allowed", [(True, True), (False, False)])
+def test_the_delete_button_allows_an_excluded_matter_device_only_with_the_option(monkeypatch, option, allowed):
+    monkeypatch.setattr(_BaseHub, "raw", MATTER_HUB)
+    entry = SimpleNamespace(entry_id="e1", data={**_DATA, "exclude_matter": option})
+    assert asyncio.run(_INIT["async_remove_config_entry_device"](_Hass(), entry, _device("d1", "m1"))) is allowed
+    # A Zigbee device the hub still has is never deletable.
+    assert asyncio.run(_INIT["async_remove_config_entry_device"](_Hass(), entry, _device("d3", "z1"))) is False

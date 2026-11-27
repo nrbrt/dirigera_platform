@@ -93,6 +93,18 @@ Or manually:
 2. Add `https://github.com/nrbrt/dirigera_platform` as an **Integration**
 3. Search for "Dirigera" and install
 
+### Update fails on Home Assistant 2026.11 or newer
+
+If an update stops with *"The update could not be started: The dirigera_platform directory belongs to sanjoyg/dirigera_platform"*, the Marketplace (which replaced HACS in Home Assistant 2026.11) still has the original `sanjoyg/dirigera_platform` marked as installed next to this fork. This happens when you switched from the original to this fork under HACS. It is a known Home Assistant bug ([home-assistant/core#193096](https://github.com/home-assistant/core/issues/193096)), with a fix under review in [home-assistant/core#193106](https://github.com/home-assistant/core/pull/193106).
+
+Until that fix is released:
+1. Go to **Settings** → **Devices & Services**, open the **Marketplace** integration and **disable** it.
+2. Make a copy of `/config/.storage/marketplace.repositories`.
+3. In that file, find the block with `"full_name": "sanjoyg/dirigera_platform"` and remove only its `"installed": true` line. Leave the `nrbrt/dirigera_platform` block alone.
+4. Save, enable the Marketplace again and retry the update.
+
+Do **not** uninstall the sanjoyg entry from the Marketplace ("Delete and uninstall"): that removes your Dirigera setup together with all its devices and entities. See [#78](https://github.com/nrbrt/dirigera_platform/issues/78).
+
 ## Setup
 
 1. Go to **Settings** → **Devices & Services** → **Add Integration** → search for **Dirigera**
